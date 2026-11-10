@@ -343,7 +343,7 @@ async fn interrupted_session_must_be_resumed_not_restarted() {
             .build()
             .unwrap()
     };
-    // Der Lauf bleibt an der Freigabe hängen und wird verworfen.
+    // Der Lauf bleibt an der Freigabe hängen; der Prozess „stürzt ab“, ohne ihn zu beenden.
     let agent = build(FakeProvider::new().tool_call("schreib", json!({})));
     let mut run = agent.run(session, "los").await.unwrap();
     loop {
@@ -352,7 +352,8 @@ async fn interrupted_session_must_be_resumed_not_restarted() {
             break;
         }
     }
-    drop(run);
+    // `forget` statt `drop`: ein verworfenes Handle würde den Lauf sauber abbrechen.
+    std::mem::forget(run);
 
     let agent = build(FakeProvider::new());
     assert!(matches!(
