@@ -9,16 +9,16 @@ durch eine Policy.
 
 ## Stand
 
-Phase 1 von 6 ist fertig: Kern und erster Lauf.
+Phase 1 und 2 von 6 sind fertig: Kern und erster Lauf, Tool-Makro und Policy.
 
 | Crate | Aufgabe |
 | --- | --- |
-| `agentkit-core` | Typen (`Message`, `Event`, `RunState`), die Traits `Provider`, `Tool`, `Store`, `Policy`, `Clock`. Kein Netzwerk. |
+| `agentkit-core` | Typen (`Message`, `Event`, `RunState`), die Traits `Provider`, `Tool`, `Store`, `Policy`, `Clock`, dazu `RuleSet` und die Schema-Prüfung. Kein Netzwerk. |
 | `agentkit-providers` | `FakeProvider` für Tests, OpenAI-kompatibler Provider mit SSE-Streaming (Feature `openai`) |
 | `agentkit-runtime` | Schrittfunktion `step`, Treiber, `Agent`-Builder, Limits, Abbruch |
-| `agentkit-tools` | `read_file` mit Begrenzung auf das Arbeitsverzeichnis |
+| `agentkit-tools` | `read_file`, `write_file` und `shell`, begrenzt auf das Arbeitsverzeichnis |
 | `agentkit-store` | `MemoryStore` (SQLite folgt in Phase 3) |
-| `agentkit-macros` | noch leer (`#[tool]` folgt in Phase 2) |
+| `agentkit-macros` | `#[tool]` macht aus einer `async fn` ein Tool samt JSON-Schema |
 | `agentkit-cli` | Binary `agentkit` mit dem Befehl `chat` |
 
 ## Ausprobieren
@@ -27,6 +27,10 @@ Ohne Netzwerk und ohne Schlüssel, mit dem Fake-Provider:
 
 ```bash
 cargo run -p agentkit-runtime --example minimal
+```
+
+```bash
+cargo run -p agentkit-runtime --example policy
 ```
 
 Mit einem echten Modell über eine OpenAI-kompatible API (auch Ollama):
@@ -39,6 +43,7 @@ cargo run -p agentkit-cli -- chat "Fasse README.md zusammen"
 ```
 
 Ohne Frage startet `agentkit chat` ein Gespräch, das Zeile für Zeile von der Standardeingabe liest.
+Lesen ist erlaubt; vor jedem Schreiben und vor jedem `shell`-Aufruf fragt die CLI im Terminal nach.
 
 ## Als Bibliothek
 
@@ -48,6 +53,8 @@ let agent = Agent::builder()
     .model("mein-modell")
     .system("Du bist ein hilfreicher Assistent.")
     .tool(ReadFile::new())
+    .tool(write_file)
+    .policy(RuleSet::safe_defaults())
     .limits(Limits { max_steps: 50, ..Limits::default() })
     .build()?;
 
@@ -64,6 +71,33 @@ let outcome = run.outcome().await?;
 
 `agent.complete(...)` ist die Kurzform: Sie liefert nur das Ergebnis und behandelt jede Rückfrage
 als Ablehnung.
+
+## Ein eigenes Tool
+
+```rust
+/// Zählt die Wörter eines Textes.
+#[tool(effect = "read_only", idempotent)]
+async fn count_words(text: String) -> Result<String, ToolError> {
+    Ok(text.split_whitespace().count().to_string())
+}
+```
+
+Name und Beschreibung kommen aus Funktionsname und Doc-Kommentar, das Schema aus den Parametern.
+Ohne Attribute gelten die sicheren Vorgaben: `write`, nicht idempotent, 60 Sekunden Zeitlimit.
+Argumente des Modells werden vor dem Aufruf gegen das Schema geprüft; Fehler gehen mit Feldpfad
+ans Modell zurück.
+
+## Policy
+
+```rust
+let policy = RuleSet::safe_defaults()
+    .rule(Rule::tool("write_file").arg("path", "notizen/*").decide(Decision::Allow))
+    .rule(Rule::tool("write_file").arg("path", "*.env").decide(Decision::Deny));
+```
+
+Greifen mehrere Regeln, gewinnt die strengste. Greift keine, fragt der Agent nach; ohne Mensch
+(`agent.complete`) wird aus der Rückfrage eine Ablehnung. Eine Ablehnung beendet den Lauf nicht:
+Das Modell bekommt sie als Fehlerergebnis.
 
 ## Prüfen
 

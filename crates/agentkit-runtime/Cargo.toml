@@ -17,6 +17,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+agentkit-macros.workspace = true
 agentkit-providers.workspace = true
 proptest.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
@@ -27,3 +28,7 @@ workspace = true
 [[example]]
 name = "minimal"
 path = "../../examples/minimal.rs"
+
+[[example]]
+name = "policy"
+path = "../../examples/policy.rs"

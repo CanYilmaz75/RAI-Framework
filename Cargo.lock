@@ -66,6 +66,7 @@ name = "agentkit-runtime"
 version = "0.1.0"
 dependencies = [
  "agentkit-core",
+ "agentkit-macros",
  "agentkit-providers",
  "async-trait",
  "futures",
