@@ -10,7 +10,7 @@ publish.workspace = true
 agentkit-core.workspace = true
 agentkit-providers = { workspace = true, features = ["openai"] }
 agentkit-tools.workspace = true
-agentkit-store.workspace = true
+agentkit-store = { workspace = true, features = ["sqlite"] }
 agentkit-runtime.workspace = true
 clap.workspace = true
 thiserror.workspace = true

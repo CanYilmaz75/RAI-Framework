@@ -3,10 +3,15 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use agentkit_core::{CallId, Decision, Event, ProviderError, RuleSet, Secret, SessionId, ToolCall};
-use agentkit_providers::OpenAiCompat;
-use agentkit_runtime::{Agent, BuildError, Outcome, RunError};
+use agentkit_core::{
+    CallId, Decision, Event, MemoryStore, Provider, ProviderError, RuleSet, Secret, SessionId,
+    Store, StoreError, ToolCall,
+};
+use agentkit_providers::{OpenAiCompat, Recording};
+use agentkit_runtime::{Agent, BuildError, Outcome, Run, RunError};
+use agentkit_store::SqliteStore;
 use agentkit_tools::{ReadFile, shell, write_file};
 
 /// Vorgabe für den System-Prompt.
@@ -23,6 +28,8 @@ pub enum CliError {
     Provider(#[from] ProviderError),
     #[error(transparent)]
     Run(#[from] RunError),
+    #[error(transparent)]
+    Store(#[from] StoreError),
     #[error("Ein-/Ausgabefehler: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -37,11 +44,21 @@ pub struct Options {
     pub workdir: Option<PathBuf>,
     /// Basis-URL der API; ohne Angabe gelten die Umgebungsvariablen.
     pub base_url: Option<String>,
+    /// SQLite-Datei für Sitzungen; ohne Angabe bleibt alles im Arbeitsspeicher.
+    pub db: Option<PathBuf>,
+    /// Datei, in die die Modellantworten für ein späteres Replay geschrieben werden.
+    pub record: Option<PathBuf>,
+}
+
+/// Der Agent samt dem Store, in dem seine Sitzungen liegen.
+pub struct App {
+    pub agent: Agent,
+    pub store: Arc<dyn Store>,
 }
 
 /// Baut den Agenten mit OpenAI-kompatiblem Provider und den Tools `read_file`, `write_file`
 /// und `shell`. Lesen ist erlaubt; Schreiben und `shell` fragen nach.
-pub fn build_agent(options: &Options) -> Result<Agent, CliError> {
+pub fn build_app(options: &Options) -> Result<App, CliError> {
     let model = options
         .model
         .clone()
@@ -60,8 +77,16 @@ pub fn build_agent(options: &Options) -> Result<Agent, CliError> {
         }
         None => OpenAiCompat::from_env()?,
     };
+    let provider: Arc<dyn Provider> = match &options.record {
+        Some(path) => Arc::new(Recording::new(provider, path.clone())),
+        None => Arc::new(provider),
+    };
+    let store: Arc<dyn Store> = match &options.db {
+        Some(path) => Arc::new(SqliteStore::open(path)?),
+        None => Arc::new(MemoryStore::new()),
+    };
     let mut builder = Agent::builder()
-        .provider(provider)
+        .provider_arc(provider)
         .model(model)
         .system(
             options
@@ -72,25 +97,58 @@ pub fn build_agent(options: &Options) -> Result<Agent, CliError> {
         .tool(ReadFile::new())
         .tool(write_file)
         .tool(shell)
-        .policy(RuleSet::safe_defaults());
+        .policy(RuleSet::safe_defaults())
+        .store_arc(store.clone());
     if let Some(workdir) = &options.workdir {
         builder = builder.workdir(workdir.clone());
     }
-    Ok(builder.build()?)
+    Ok(App {
+        agent: builder.build()?,
+        store,
+    })
 }
 
-/// Führt einen Gesprächszug aus und streamt die Antwort nach `out`.
-///
-/// `approve` wird für jeden Aufruf gefragt, der eine Freigabe braucht.
+/// Ausgabe und Rückfrage eines Gesprächszugs.
+pub struct Terminal<'a> {
+    pub out: &'a mut (dyn Write + Send),
+    /// Wird für jeden Aufruf gefragt, der eine Freigabe braucht.
+    pub approve: &'a mut (dyn FnMut(&ToolCall) -> Decision + Send),
+}
+
+/// Führt einen Gesprächszug aus und streamt die Antwort ins Terminal.
 pub async fn chat_turn(
-    agent: &Agent,
+    app: &App,
     session: SessionId,
     prompt: &str,
-    out: &mut (dyn Write + Send),
-    approve: &mut (dyn FnMut(&ToolCall) -> Decision + Send),
+    terminal: Terminal<'_>,
 ) -> Result<Outcome, CliError> {
-    let mut run = agent.run(session, prompt).await?;
-    let mut calls: HashMap<CallId, ToolCall> = HashMap::new();
+    let run = app.agent.run(session, prompt).await?;
+    drive(run, HashMap::new(), terminal).await
+}
+
+/// Setzt einen unterbrochenen Lauf am letzten gespeicherten Zustand fort.
+pub async fn resume_turn(
+    app: &App,
+    session: SessionId,
+    terminal: Terminal<'_>,
+) -> Result<Outcome, CliError> {
+    // Aufrufe aus dem Log, damit eine erneute Rückfrage zeigen kann, worum es geht.
+    let mut calls = HashMap::new();
+    for envelope in app.store.load(session).await? {
+        if let Event::ToolRequested { call } = envelope.event {
+            calls.insert(call.id, call);
+        }
+    }
+    let run = app.agent.resume(session).await?;
+    drive(run, calls, terminal).await
+}
+
+async fn drive(
+    mut run: Run,
+    mut calls: HashMap<CallId, ToolCall>,
+    terminal: Terminal<'_>,
+) -> Result<Outcome, CliError> {
+    let Terminal { out, approve } = terminal;
     while let Some(envelope) = run.next().await {
         match envelope?.event {
             Event::TextDelta { text, .. } => {

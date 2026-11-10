@@ -68,6 +68,7 @@ dependencies = [
  "agentkit-core",
  "agentkit-macros",
  "agentkit-providers",
+ "agentkit-store",
  "async-trait",
  "futures",
  "proptest",

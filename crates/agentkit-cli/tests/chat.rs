@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use agentkit_cli::{CliError, Options, build_agent, chat_turn};
+use agentkit_cli::{CliError, Options, Terminal, build_app, chat_turn};
 use agentkit_core::{Decision, FinishReason, SessionId};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -123,15 +123,17 @@ async fn chat_turn_answers_a_question_that_needs_read_file() {
         base_url: Some(base_url),
         ..Options::default()
     };
-    let agent = build_agent(&options).unwrap();
+    let app = build_app(&options).unwrap();
     let mut out = Vec::new();
     let mut approve = |_: &agentkit_core::ToolCall| Decision::Deny;
     let outcome = chat_turn(
-        &agent,
+        &app,
         SessionId::new(),
         "Wie lautet die Geheimzahl?",
-        &mut out,
-        &mut approve,
+        Terminal {
+            out: &mut out,
+            approve: &mut approve,
+        },
     )
     .await
     .unwrap();
@@ -158,6 +160,8 @@ async fn binary_streams_the_answer_to_stdout() {
         std::process::Command::new(env!("CARGO_BIN_EXE_agentkit"))
             .args(["chat", "Wie lautet die Geheimzahl?", "--workdir"])
             .arg(&workdir)
+            .arg("--db")
+            .arg(workdir.join("sitzungen.db"))
             .env("AGENTKIT_BASE_URL", base_url)
             .env("AGENTKIT_MODEL", "test-modell")
             .env_remove("AGENTKIT_API_KEY")
@@ -206,7 +210,7 @@ async fn write_file_asks_first_and_obeys_the_answer() {
             base_url: Some(base_url),
             ..Options::default()
         };
-        let agent = build_agent(&options).unwrap();
+        let app = build_app(&options).unwrap();
         let mut asked = Vec::new();
         let mut approve = |call: &agentkit_core::ToolCall| {
             asked.push(call.name.clone());
@@ -214,11 +218,13 @@ async fn write_file_asks_first_and_obeys_the_answer() {
         };
         let mut out = Vec::new();
         chat_turn(
-            &agent,
+            &app,
             SessionId::new(),
             "Schreib neu.txt",
-            &mut out,
-            &mut approve,
+            Terminal {
+                out: &mut out,
+                approve: &mut approve,
+            },
         )
         .await
         .unwrap();
@@ -237,7 +243,82 @@ async fn write_file_asks_first_and_obeys_the_answer() {
 
 #[test]
 fn missing_model_is_a_config_error() {
-    let error = build_agent(&Options::default()).err().unwrap();
+    let error = build_app(&Options::default()).err().unwrap();
     assert!(matches!(error, CliError::Config(_)));
     assert!(error.to_string().contains("--model"));
+}
+
+/// Abnahme Phase 3 über das Binary: Der erste Prozess bleibt an der Rückfrage stehen und
+/// „stürzt ab“; `agentkit resume <id>` setzt den Lauf aus der SQLite-Datei fort.
+#[tokio::test(flavor = "multi_thread")]
+async fn resume_continues_an_interrupted_run_from_the_database() {
+    let (base_url, requests) = mock_api(write_script()).await;
+    let dir = workdir();
+    let db = dir.join("sitzungen.db");
+    let options = Options {
+        model: Some("test-modell".into()),
+        workdir: Some(dir.clone()),
+        base_url: Some(base_url.clone()),
+        db: Some(db.clone()),
+        ..Options::default()
+    };
+    let session = SessionId::new();
+    let app = build_app(&options).unwrap();
+    let mut run = app.agent.run(session, "Schreib neu.txt").await.unwrap();
+    loop {
+        if matches!(
+            run.next().await.unwrap().unwrap().event,
+            agentkit_core::Event::ApprovalNeeded { .. }
+        ) {
+            break;
+        }
+    }
+    // `forget` statt `drop`: ein verworfenes Handle würde den Lauf sauber abbrechen.
+    std::mem::forget(run);
+    assert!(!dir.join("neu.txt").exists());
+
+    let workdir = dir.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_agentkit"))
+            .args([
+                "resume",
+                &session.to_string(),
+                "--model",
+                "test-modell",
+                "--base-url",
+                &base_url,
+            ])
+            .arg("--workdir")
+            .arg(&workdir)
+            .arg("--db")
+            .arg(&db)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"j\n").unwrap();
+        child.wait_with_output().unwrap()
+    })
+    .await
+    .unwrap();
+
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("Tool write_file mit"), "{stderr}");
+    assert!(stdout.ends_with("Erledigt.\n"), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("neu.txt")).unwrap(),
+        "hallo"
+    );
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        2,
+        "die erste Modellantwort wurde nicht erneut angefragt"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }
