@@ -3,8 +3,10 @@
 pub mod fake;
 #[cfg(feature = "openai")]
 pub mod openai;
+pub mod recording;
 pub mod sse;
 
 pub use fake::FakeProvider;
 #[cfg(feature = "openai")]
 pub use openai::OpenAiCompat;
+pub use recording::Recording;
