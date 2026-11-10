@@ -137,6 +137,18 @@ impl ToolOutput {
     }
 }
 
+impl From<String> for ToolOutput {
+    fn from(text: String) -> Self {
+        Self::text(text)
+    }
+}
+
+impl From<&str> for ToolOutput {
+    fn from(text: &str) -> Self {
+        Self::text(text)
+    }
+}
+
 /// Rohdaten, als Hex-Text serialisiert.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bytes(pub Vec<u8>);
@@ -280,6 +292,7 @@ mod tests {
             OutputBlock::Text("b".into()),
         ]);
         assert_eq!(output.as_text(), "ab");
+        assert_eq!(ToolOutput::from("x"), ToolOutput::from(String::from("x")));
         roundtrip(&output);
     }
 
