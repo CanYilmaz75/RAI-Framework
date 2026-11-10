@@ -17,7 +17,7 @@ agentkit-store = { path = "crates/agentkit-store" }
 agentkit-runtime = { path = "crates/agentkit-runtime" }
 
 async-trait = "0.1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
