@@ -2,6 +2,26 @@
 
 ## Unveröffentlicht
 
+### Dienst
+
+- `can-server`: HTTP-API für Sitzungen, Nachrichten, Event-Strom mit Wiederaufsetzen, Freigaben,
+  Abbruch und Fortsetzen; API-Schlüssel, Rollen, Mandantentrennung, Kontingente,
+  Idempotenz-Schlüssel, Prometheus-Kennzahlen, Web-Oberfläche
+- Übernahme unterbrochener Läufe durch einen anderen Worker
+- Sitzungsverzeichnis in PostgreSQL, `Dockerfile`, CI-Workflow mit PostgreSQL
+
+### Fundament für den Betrieb
+
+- `Digest` ist SHA-256 statt FNV
+- Secrets werden aus Events, Log, Kanal und Modellanfragen geschwärzt
+- Bricht eine Modellantwort mittendrin ab, wird der Schritt bis zu zweimal neu angefragt
+- `shell` beendet beim Abbruch die ganze Prozessgruppe und behält höchstens 1 MiB je Ausgabestrom;
+  der SSE-Parser verwirft überlange Zeilen
+- Große Tool-Ausgaben liegen vollständig als Blob im Store
+- Sitzungssperre mit Heartbeat wird erzwungen
+- `PostgresStore` für viele gleichzeitige Schreiber
+- Neue Abhängigkeiten: `sha2`, `tokio-postgres`, `axum`
+
 ### Umbenennung
 
 - Das Projekt heißt jetzt Can: Crates `can-*`, Binary `can`, Umgebungsvariablen `CAN_*`,
