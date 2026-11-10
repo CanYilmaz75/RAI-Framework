@@ -31,6 +31,22 @@ fn is_transient(error: &ProviderError) -> bool {
 /// So viele Tools laufen höchstens gleichzeitig.
 const MAX_PARALLEL_TOOLS: usize = 4;
 
+/// Verlängert die Sperre, solange der Lauf lebt. Geht sie verloren, endet nur die Verlängerung;
+/// der nächste Schreibversuch scheitert dann am Konflikt.
+async fn heartbeat(agent: Arc<Inner>, session: SessionId) {
+    loop {
+        agent.clock.sleep(agent.lease / 3).await;
+        if let Err(error) = agent
+            .store
+            .acquire(session, &agent.owner, agent.clock.now(), agent.lease)
+            .await
+        {
+            tracing::warn!(%error, "Sperre der Sitzung nicht verlängert");
+            return;
+        }
+    }
+}
+
 pub(crate) struct Driver {
     pub(crate) agent: Arc<Inner>,
     pub(crate) session: SessionId,
@@ -47,7 +63,24 @@ pub(crate) struct Driver {
 
 impl Driver {
     /// Wiederholt: `step` aufrufen, Events speichern, anwenden und verteilen, Effekte ausführen.
+    /// Führt den Lauf unter der Sperre der Sitzung: nehmen, regelmäßig verlängern, freigeben.
     pub(crate) async fn run(mut self, first: Input) -> Result<Outcome, RunError> {
+        let (agent, session) = (self.agent.clone(), self.session);
+        agent
+            .store
+            .acquire(session, &agent.owner, agent.clock.now(), agent.lease)
+            .await?;
+        let heartbeat = tokio::spawn(heartbeat(agent.clone(), session));
+        let outcome = self.drive(first).await;
+        heartbeat.abort();
+        if let Err(error) = agent.store.release(session, &agent.owner).await {
+            tracing::warn!(%error, "Sperre der Sitzung nicht freigegeben");
+        }
+        outcome
+    }
+
+    /// Wiederholt: `step` aufrufen, Events speichern, anwenden und verteilen, Effekte ausführen.
+    async fn drive(&mut self, first: Input) -> Result<Outcome, RunError> {
         let mut queue = VecDeque::from([first]);
         loop {
             let input = match queue.pop_front() {
@@ -307,16 +340,37 @@ impl Driver {
             progress: ProgressSink::noop(),
             secrets: self.agent.secrets.clone(),
         };
+        let max_output_bytes = tool.spec().max_output_bytes;
         match exec::run_tool(tool, call, cx, &self.cancel, self.remaining()).await {
-            ToolRun::Done { output, is_error } => Input::ToolDone {
-                call_id,
-                output,
-                is_error,
-            },
+            ToolRun::Done { output, is_error } => {
+                let output = self.shorten(output, max_output_bytes).await;
+                Input::ToolDone {
+                    call_id,
+                    output,
+                    is_error,
+                }
+            }
             ToolRun::Fatal(message) => Input::ToolFatal { call_id, message },
             ToolRun::Cancelled => Input::Cancel,
             ToolRun::Deadline => Input::Tick(self.agent.clock.now()),
         }
+    }
+
+    /// Kürzt eine zu große Ausgabe für das Modell. Die volle Ausgabe geht als Blob in den Store;
+    /// das Ergebnis nennt ihre Inhaltsadresse.
+    async fn shorten(&self, output: ToolOutput, max_bytes: usize) -> ToolOutput {
+        if exec::text_bytes(&output) <= max_bytes {
+            return output;
+        }
+        let full = self.agent.redactor.text(&output.as_text()).into_bytes();
+        let size = full.len();
+        let mut shortened = exec::truncate(output, max_bytes);
+        let note = match self.agent.store.put_blob(full).await {
+            Ok(digest) => format!("\n[Volle Ausgabe: {size} Bytes, im Store als Blob {digest}]"),
+            Err(error) => format!("\n[Volle Ausgabe: {size} Bytes, nicht gespeichert: {error}]"),
+        };
+        shortened.0.push(can_core::OutputBlock::Text(note));
+        shortened
     }
 
     /// Restzeit bis zum Zeitlimit des Laufs.

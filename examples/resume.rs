@@ -27,6 +27,9 @@ fn agent(
         .model("fake")
         .tool(save_note)
         .policy(RuleSet::safe_defaults())
+        // Gleiche Besitzerkennung wie nach dem Neustart desselben Workers: die Sperre des
+        // abgestürzten Prozesses darf sofort übernommen werden.
+        .owner("beispiel-worker")
         .store(SqliteStore::open(db)?)
         .build()?)
 }

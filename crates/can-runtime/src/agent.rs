@@ -3,6 +3,7 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use can_core::{
     ByEffect, Clock, Limits, MemoryStore, Message, Phase, Policy, Provider, RunConfig, RunId,
@@ -33,6 +34,10 @@ pub(crate) struct Inner {
     pub(crate) workdir: PathBuf,
     pub(crate) secrets: SecretsHandle,
     pub(crate) redactor: Redactor,
+    /// Kennung dieses Schreibers für die Sperre der Sitzungen.
+    pub(crate) owner: String,
+    /// Laufzeit der Sperre; sie wird alle `lease / 3` verlängert.
+    pub(crate) lease: Duration,
 }
 
 /// Ein fertig konfigurierter Agent. Billig zu klonen.
@@ -158,6 +163,8 @@ pub struct AgentBuilder {
     extra: Map<String, Value>,
     workdir: Option<PathBuf>,
     secrets: SecretsHandle,
+    owner: Option<String>,
+    lease: Option<Duration>,
 }
 
 impl AgentBuilder {
@@ -251,6 +258,20 @@ impl AgentBuilder {
         self
     }
 
+    /// Kennung, unter der dieser Agent Sitzungen sperrt; Vorgabe ist eine zufällige pro Agent.
+    /// Derselbe Besitzer darf eine eigene Sperre sofort wieder übernehmen, etwa nach Neustart.
+    pub fn owner(mut self, owner: impl Into<String>) -> Self {
+        self.owner = Some(owner.into());
+        self
+    }
+
+    /// Laufzeit der Sitzungssperre; Vorgabe 30 Sekunden. Ein abgestürzter Schreiber gibt die
+    /// Sitzung nach dieser Zeit frei.
+    pub fn lease(mut self, lease: Duration) -> Self {
+        self.lease = Some(lease);
+        self
+    }
+
     /// Prüft Tool-Namen, Modellfähigkeiten, Limits und Arbeitsverzeichnis.
     pub fn build(self) -> Result<Agent, BuildError> {
         let mut problems = Vec::new();
@@ -309,6 +330,8 @@ impl AgentBuilder {
                 config,
                 workdir,
                 redactor: Redactor::new(&self.secrets),
+                owner: self.owner.unwrap_or_else(|| SessionId::new().to_string()),
+                lease: self.lease.unwrap_or(Duration::from_secs(30)),
                 secrets: self.secrets,
             }),
         })

@@ -41,10 +41,10 @@ pub(crate) async fn run_tool(
         _ = run_cancel.cancelled() => ToolRun::Cancelled,
         joined = &mut task => match joined {
             Ok(Ok(output)) => {
-                ToolRun::Done { output: truncate(output, spec.max_output_bytes), is_error: false }
+                ToolRun::Done { output, is_error: false }
             }
             Ok(Err(ToolError::ForModel(message))) => {
-                ToolRun::Done { output: truncate(ToolOutput::text(message), spec.max_output_bytes), is_error: true }
+                ToolRun::Done { output: ToolOutput::text(message), is_error: true }
             }
             Ok(Err(ToolError::Fatal(error))) => ToolRun::Fatal(error.to_string()),
             Err(_) => ToolRun::Done {
@@ -70,6 +70,11 @@ pub(crate) async fn run_tool(
         }
     }
     outcome
+}
+
+/// Größe aller Textblöcke zusammen.
+pub(crate) fn text_bytes(output: &ToolOutput) -> usize {
+    output.as_text().len()
 }
 
 /// Kürzt Textblöcke auf zusammen höchstens `max_bytes`: Anfang und Ende bleiben, die Mitte

@@ -9,8 +9,8 @@ CREATE TABLE sessions (
   created_at  INTEGER NOT NULL,
   config_json TEXT NOT NULL,
   status      TEXT NOT NULL,      -- running, finished, failed
-  owner       TEXT,               -- Prozess, der die Sitzung zuletzt geschrieben hat
-  heartbeat   INTEGER
+  owner       TEXT,               -- Schreiber, der die Sitzung gerade führt
+  heartbeat   INTEGER             -- Ablauf seiner Sperre in Millisekunden
 );
 CREATE TABLE events (
   session_id  TEXT NOT NULL REFERENCES sessions(id),

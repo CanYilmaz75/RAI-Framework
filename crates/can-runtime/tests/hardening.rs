@@ -161,3 +161,103 @@ async fn restarts_are_bounded_and_only_for_transient_errors() {
     assert!(matches!(reason, FinishReason::Error { message } if message.contains("kaputt")));
     assert_eq!(attempts, 1);
 }
+
+/// Tool mit sehr großer Ausgabe.
+struct Verbose(ToolSpec);
+
+#[async_trait]
+impl Tool for Verbose {
+    fn spec(&self) -> &ToolSpec {
+        &self.0
+    }
+
+    async fn call(&self, _args: Value, _cx: &ToolCtx) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput::text(format!(
+            "ANFANG{}ENDE",
+            "x".repeat(200_000)
+        )))
+    }
+}
+
+#[tokio::test]
+async fn large_tool_output_is_shortened_for_the_model_and_kept_whole_as_blob() {
+    let provider = Arc::new(FakeProvider::new().tool_call("viel", json!({})).text("ok"));
+    let store = Arc::new(MemoryStore::new());
+    let spec =
+        ToolSpec::new("viel", "viel Text", json!({"type": "object"})).with_effect(Effect::ReadOnly);
+    let agent = Agent::builder()
+        .provider_arc(provider.clone())
+        .model("test")
+        .tool(Verbose(spec))
+        .store_arc(store.clone())
+        .build()
+        .unwrap();
+    let session = SessionId::new();
+    agent.complete(session, "los").await.unwrap();
+
+    let log = store.load(session).await.unwrap();
+    let output = log
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            Event::ToolFinished { output, .. } => Some(output.as_text()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(output.len() < 70_000, "{}", output.len());
+    assert!(output.starts_with("ANFANG") && output.contains("ENDE\n[Volle Ausgabe: 200010 Bytes"));
+    let digest = output.rsplit("Blob ").next().unwrap().trim_end_matches(']');
+    let blob = store
+        .get_blob(&can_core::Digest(digest.to_owned()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(blob.len(), 200_010);
+}
+
+#[tokio::test]
+async fn a_second_writer_cannot_take_over_a_live_session() {
+    use can_core::{Decision, StoreError};
+    use can_runtime::RunError;
+
+    let store = Arc::new(MemoryStore::new());
+    let session = SessionId::new();
+    let build = |provider: FakeProvider, owner: &str| {
+        let spec = ToolSpec::new("schreib", "schreibt", json!({"type": "object"}));
+        Agent::builder()
+            .provider(provider)
+            .model("test")
+            .tool(Verbose(spec))
+            .store_arc(store.clone())
+            .owner(owner)
+            .build()
+            .unwrap()
+    };
+    // Worker A bleibt an der Rückfrage stehen und hält die Sperre.
+    let first = build(
+        FakeProvider::new()
+            .tool_call("schreib", json!({}))
+            .text("fertig"),
+        "worker-a",
+    );
+    let mut run = first.run(session, "los").await.unwrap();
+    let call_id = loop {
+        if let Event::ApprovalNeeded { call_id } = run.next().await.unwrap().unwrap().event {
+            break call_id;
+        }
+    };
+
+    let second = build(FakeProvider::new(), "worker-b");
+    let stolen = second.resume(session).await.unwrap().outcome().await;
+    assert!(
+        matches!(stolen, Err(RunError::Store(StoreError::Locked { owner, .. })) if owner == "worker-a")
+    );
+
+    // A arbeitet ungestört weiter; danach ist die Sitzung frei.
+    run.resolve(call_id, Decision::Allow).await.unwrap();
+    assert_eq!(run.outcome().await.unwrap().reason, FinishReason::Completed);
+    let third = build(FakeProvider::new().text("weiter"), "worker-b");
+    assert_eq!(
+        third.complete(session, "und jetzt?").await.unwrap().text,
+        "weiter"
+    );
+}
