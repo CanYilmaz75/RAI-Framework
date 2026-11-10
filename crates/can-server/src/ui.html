@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Can</title>
+<style>
+  :root { --line: #d9dde3; --ink: #1c2330; --muted: #5d6877; --accent: #1f5fbf; --bg: #f6f7f9; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+  header { display: flex; gap: 12px; align-items: center; padding: 12px 16px; background: #fff; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0 12px 0 0; }
+  main { display: grid; grid-template-columns: 280px 1fr; gap: 16px; padding: 16px; max-width: 1200px; margin: 0 auto; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  section { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  h2 { font-size: 14px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
+  label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 4px; }
+  input, select, textarea, button { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; min-height: 40px; }
+  input, select, textarea { width: 100%; background: #fff; }
+  button { background: var(--accent); color: #fff; border-color: var(--accent); cursor: pointer; }
+  button.plain { background: #fff; color: var(--ink); border-color: var(--line); }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  #sessions li button { width: 100%; text-align: left; margin-bottom: 6px; }
+  #sessions li button[aria-current="true"] { border-color: var(--accent); }
+  .status { font-size: 12px; color: var(--muted); }
+  #timeline { max-height: 55vh; overflow: auto; border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
+  .event { padding: 6px 0; border-bottom: 1px solid var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .event .kind { font-size: 12px; color: var(--muted); }
+  .approval { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 0; }
+  .row { display: flex; gap: 8px; margin-top: 8px; }
+  #message { color: #9a2b2b; min-height: 1.5em; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Can</h1>
+  <div style="flex:1; max-width: 360px">
+    <label for="key">API-Schlüssel</label>
+    <input id="key" type="password" autocomplete="off">
+  </div>
+  <button id="connect">Verbinden</button>
+</header>
+<main>
+  <div>
+    <section>
+      <h2>Neue Sitzung</h2>
+      <label for="agent">Agent</label>
+      <select id="agent"></select>
+      <label for="input" style="margin-top:8px">Aufgabe</label>
+      <textarea id="input" rows="3"></textarea>
+      <div class="row"><button id="start">Lauf starten</button></div>
+    </section>
+    <section style="margin-top:16px">
+      <h2>Sitzungen</h2>
+      <ul id="sessions"><li class="status">Mit einem Schlüssel verbinden, um Sitzungen zu sehen.</li></ul>
+    </section>
+  </div>
+  <div>
+    <section>
+      <h2>Offene Freigaben</h2>
+      <div id="approvals" class="status">Keine offenen Freigaben.</div>
+    </section>
+    <section style="margin-top:16px">
+      <h2 id="title">Verlauf</h2>
+      <div id="message" role="status"></div>
+      <div class="row">
+        <input id="followup" aria-label="Nachricht an die Sitzung">
+        <button id="send">Nachricht senden</button>
+        <button id="cancel" class="plain">Lauf abbrechen</button>
+      </div>
+      <div id="timeline" aria-live="polite"></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let current = null, reader = null;
+
+async function api(path, options = {}) {
+  const headers = { authorization: "Bearer " + $("key").value, "content-type": "application/json" };
+  const response = await fetch(path, { ...options, headers });
+  const text = await response.text();
+  const body = text ? JSON.parse(text) : {};
+  if (!response.ok) throw new Error(body.error || "Anfrage fehlgeschlagen (" + response.status + ")");
+  return body;
+}
+const say = (text) => { $("message").textContent = text || ""; };
+const guard = (work) => async () => { try { say(""); await work(); } catch (error) { say(error.message); } };
+
+async function refresh() {
+  const { agents } = await api("/v1/agents");
+  $("agent").replaceChildren(...agents.map((name) => new Option(name, name)));
+  const { sessions } = await api("/v1/sessions");
+  const items = sessions.map((session) => {
+    const button = document.createElement("button");
+    button.className = "plain";
+    button.setAttribute("aria-current", session.id === current);
+    button.textContent = session.agent + " · " + session.status + " · " + session.id.slice(-6);
+    button.onclick = guard(() => open(session.id));
+    const item = document.createElement("li");
+    item.append(button);
+    return item;
+  });
+  $("sessions").replaceChildren(...(items.length ? items : [Object.assign(document.createElement("li"), { className: "status", textContent: "Noch keine Sitzungen. Oben eine Aufgabe eingeben." })]));
+  const { approvals } = await api("/v1/approvals");
+  const rows = approvals.map((approval) => {
+    const row = document.createElement("div");
+    row.className = "approval";
+    row.append(approval.tool + " " + JSON.stringify(approval.input));
+    for (const [label, decision, cls] of [["Aufruf erlauben", "allow", ""], ["Aufruf ablehnen", "deny", "plain"]]) {
+      const button = document.createElement("button");
+      button.textContent = label; button.className = cls;
+      button.onclick = guard(async () => {
+        await api(`/v1/sessions/${approval.session_id}/approvals/${approval.call_id}`, { method: "POST", body: JSON.stringify({ decision }) });
+        await refresh();
+      });
+      row.append(button);
+    }
+    return row;
+  });
+  $("approvals").replaceChildren(...(rows.length ? rows : ["Keine offenen Freigaben."]));
+}
+
+function show(envelope) {
+  const event = envelope.event, row = document.createElement("div");
+  row.className = "event";
+  const kind = document.createElement("div");
+  kind.className = "kind"; kind.textContent = envelope.seq + " · " + event.type;
+  let text = "";
+  if (event.type === "run_started") text = event.input.content.map((b) => b.value).join("");
+  if (event.type === "model_responded") text = event.message.content.map((b) => typeof b.value === "string" ? b.value : JSON.stringify(b.value)).join("\n");
+  if (event.type === "tool_finished") text = JSON.stringify(event.output);
+  if (event.type === "run_finished") text = JSON.stringify(event.reason);
+  row.append(kind, text);
+  $("timeline").append(row);
+  row.scrollIntoView({ block: "nearest" });
+}
+
+async function open(id) {
+  if (reader) await reader.cancel().catch(() => {});
+  current = id; $("title").textContent = "Verlauf " + id; $("timeline").replaceChildren();
+  await refresh();
+  const response = await fetch(`/v1/sessions/${id}/events`, { headers: { authorization: "Bearer " + $("key").value } });
+  reader = response.body.getReader();
+  const decoder = new TextDecoder(); let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done || current !== id) break;
+    buffer += decoder.decode(value, { stream: true });
+    let end;
+    while ((end = buffer.indexOf("\n\n")) >= 0) {
+      const data = buffer.slice(0, end).split("\n").find((line) => line.startsWith("data:"));
+      buffer = buffer.slice(end + 2);
+      if (!data) continue;
+      const envelope = JSON.parse(data.slice(5));
+      if (envelope.event.type !== "text_delta") show(envelope);
+      if (envelope.event.type === "approval_needed" || envelope.event.type === "run_finished") refresh().catch(() => {});
+    }
+  }
+}
+
+$("connect").onclick = guard(refresh);
+$("start").onclick = guard(async () => {
+  const { session_id } = await api("/v1/sessions", { method: "POST", body: JSON.stringify({ agent: $("agent").value, input: $("input").value }) });
+  $("input").value = "";
+  await open(session_id);
+});
+$("send").onclick = guard(async () => {
+  if (!current) throw new Error("Zuerst eine Sitzung auswählen.");
+  await api(`/v1/sessions/${current}/messages`, { method: "POST", body: JSON.stringify({ input: $("followup").value }) });
+  $("followup").value = "";
+  await open(current);
+});
+$("cancel").onclick = guard(async () => {
+  if (!current) throw new Error("Zuerst eine Sitzung auswählen.");
+  await api(`/v1/sessions/${current}/cancel`, { method: "POST", body: "{}" });
+});
+</script>
+</body>
+</html>

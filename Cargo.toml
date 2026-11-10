@@ -15,8 +15,10 @@ can-macros = { path = "crates/can-macros" }
 can-tools = { path = "crates/can-tools" }
 can-store = { path = "crates/can-store" }
 can-runtime = { path = "crates/can-runtime" }
+can-server = { path = "crates/can-server" }
 
 async-trait = "0.1"
+axum = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
