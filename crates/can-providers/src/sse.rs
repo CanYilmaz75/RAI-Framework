@@ -12,12 +12,16 @@ pub struct SseEvent {
     pub data: String,
 }
 
+/// Längste Zeile, die der Parser annimmt.
+pub const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
+
 /// Parser für einen SSE-Byte-Strom.
 #[derive(Debug, Default)]
 pub struct SseParser {
     line: Vec<u8>,
     event: Option<String>,
     data: Vec<String>,
+    overflow: bool,
 }
 
 impl SseParser {
@@ -32,9 +36,14 @@ impl SseParser {
         for &byte in bytes {
             if byte == b'\n' {
                 let line = std::mem::take(&mut self.line);
-                self.on_line(&line, &mut out);
-            } else {
+                if !std::mem::take(&mut self.overflow) {
+                    self.on_line(&line, &mut out);
+                }
+            } else if self.line.len() < MAX_LINE_BYTES {
                 self.line.push(byte);
+            } else {
+                // Überlange Zeile: der Rest wird verworfen, damit ein Server den Speicher nicht füllt.
+                self.overflow = true;
             }
         }
         out
@@ -183,6 +192,23 @@ mod tests {
     #[test]
     fn blank_lines_without_data_emit_nothing() {
         assert!(parse_whole(b"\n\nevent: x\n\nid: 7\nretry: 3\n\n").is_empty());
+    }
+
+    #[test]
+    fn overlong_lines_are_dropped_without_growing() {
+        let mut parser = SseParser::new();
+        let big = vec![b'x'; MAX_LINE_BYTES + 10];
+        assert!(parser.feed(b"data: ").is_empty());
+        assert!(parser.feed(&big).is_empty());
+        assert!(parser.line.len() <= MAX_LINE_BYTES);
+        let events = parser.feed(b"\n\ndata: danach\n\n");
+        assert_eq!(
+            events,
+            vec![SseEvent {
+                event: None,
+                data: "danach".into()
+            }]
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ impl Timestamp {
     }
 }
 
-/// Prüfsumme über Bytes (FNV-1a, 64 Bit, als Hex). Nicht kryptografisch.
+/// Inhaltsadresse: SHA-256 über die Bytes, als Hex.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Digest(pub String);
@@ -38,12 +38,9 @@ pub struct Digest(pub String);
 impl Digest {
     /// Berechnet die Prüfsumme über `bytes`.
     pub fn of(bytes: &[u8]) -> Self {
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in bytes {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        Self(format!("{hash:016x}"))
+        use sha2::Digest as _;
+        let hash = sha2::Sha256::digest(bytes);
+        Self(hash.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 }
 
@@ -284,9 +281,12 @@ mod tests {
 
     #[test]
     fn digest_is_stable_and_distinguishes() {
-        assert_eq!(Digest::of(b""), Digest("cbf29ce484222325".into()));
+        assert_eq!(
+            Digest::of(b""),
+            Digest("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into())
+        );
         assert_ne!(Digest::of(b"a"), Digest::of(b"b"));
-        assert_eq!(Digest::of(b"a").to_string().len(), 16);
+        assert_eq!(Digest::of(b"a").to_string().len(), 64);
     }
 
     #[test]
