@@ -259,3 +259,85 @@ mod sqlite {
         );
     }
 }
+
+/// Läuft nur, wenn `CAN_TEST_POSTGRES_URL` auf eine erreichbare Datenbank zeigt.
+#[cfg(feature = "postgres")]
+mod postgres {
+    use super::*;
+    use can_store::PostgresStore;
+    use std::sync::Arc;
+
+    fn url() -> Option<String> {
+        let url = std::env::var("CAN_TEST_POSTGRES_URL")
+            .ok()
+            .filter(|url| !url.is_empty());
+        if url.is_none() {
+            eprintln!("CAN_TEST_POSTGRES_URL ist nicht gesetzt: PostgreSQL-Tests übersprungen");
+        }
+        url
+    }
+
+    #[tokio::test]
+    async fn postgres_store_conforms() {
+        let Some(url) = url() else { return };
+        let store = PostgresStore::connect(&url).await.unwrap();
+        conformance(&store).await;
+        blobs_and_leases(&store).await;
+        // Ein zweiter Prozess migriert nicht erneut und sieht dieselben Daten.
+        let session = SessionId::new();
+        store.append(session, &[requested(0)]).await.unwrap();
+        let other = PostgresStore::connect(&url).await.unwrap();
+        assert_eq!(other.load(session).await.unwrap(), vec![requested(0)]);
+    }
+
+    #[tokio::test]
+    async fn concurrent_writers_never_produce_gaps_or_duplicates() {
+        let Some(url) = url() else { return };
+        let session = SessionId::new();
+        let mut writers = Vec::new();
+        // Acht Verbindungen wollen gleichzeitig dieselben zwanzig Positionen belegen.
+        for _ in 0..8 {
+            let store = Arc::new(PostgresStore::connect(&url).await.unwrap());
+            writers.push(tokio::spawn(async move {
+                let mut won = 0;
+                for seq in 0..20 {
+                    match store.append(session, &[requested(seq)]).await {
+                        Ok(()) => won += 1,
+                        Err(StoreError::Conflict { .. }) => {}
+                        Err(other) => panic!("{other}"),
+                    }
+                }
+                won
+            }));
+        }
+        let mut total = 0;
+        for writer in writers {
+            total += writer.await.unwrap();
+        }
+        let store = PostgresStore::connect(&url).await.unwrap();
+        let seqs: Vec<u64> = store
+            .load(session)
+            .await
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect();
+        assert_eq!(
+            seqs,
+            (0..seqs.len() as u64).collect::<Vec<u64>>(),
+            "lückenlos und ohne Doppelte"
+        );
+        assert_eq!(
+            total,
+            seqs.len(),
+            "jede Position hat genau ein Schreiber gewonnen"
+        );
+        assert!(!seqs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unreachable_database_is_a_backend_error() {
+        let result = PostgresStore::connect("postgres://can@127.0.0.1:1/postgres").await;
+        assert!(matches!(result, Err(StoreError::Backend(_))));
+    }
+}
