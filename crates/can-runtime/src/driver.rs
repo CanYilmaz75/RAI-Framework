@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use can_core::{
-    Approver, Assembler, Chunk, Decision, Envelope, Event, FinishReason, Phase, ProgressSink,
-    Request, RunId, RunState, SCHEMA_VERSION, SessionId, ToolCall, ToolCtx, ToolOutput,
+    Approver, Assembler, Chunk, Decision, Envelope, Event, FinishReason, Message, Phase,
+    ProgressSink, Request, RunId, RunState, SCHEMA_VERSION, SessionId, ToolCall, ToolCtx,
+    ToolOutput,
 };
 use futures::StreamExt;
 use tokio::sync::mpsc::{self, error::TrySendError};
@@ -16,6 +17,9 @@ use crate::agent::Inner;
 use crate::exec::{self, ToolRun};
 use crate::run::{Command, Outcome, RunError};
 use crate::step::{Effect, Input, step};
+
+/// So viele Tools laufen höchstens gleichzeitig.
+const MAX_PARALLEL_TOOLS: usize = 4;
 
 pub(crate) struct Driver {
     pub(crate) agent: Arc<Inner>,
@@ -43,9 +47,14 @@ impl Driver {
             };
             let step = step(&self.state, input);
             self.commit(step.events).await?;
-            for effect in step.effects {
+            let (tools, others): (Vec<Effect>, Vec<Effect>) = step
+                .effects
+                .into_iter()
+                .partition(|effect| matches!(effect, Effect::RunTool(_)));
+            for effect in others {
                 queue.push_back(self.execute(effect).await);
             }
+            queue.extend(self.run_tools(tools).await);
         }
         Ok(Outcome {
             reason: self.state.finish.clone().unwrap_or(FinishReason::Cancelled),
@@ -115,6 +124,16 @@ impl Driver {
             }
             Effect::CheckPolicy(call) => self.check_policy(&call),
             Effect::RunTool(call) => self.run_tool(&call).await,
+            Effect::Compact { up_to_seq, request } => {
+                let (clock, cancel) = (self.agent.clock.clone(), self.cancel.clone());
+                let remaining = self.remaining();
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => Input::Cancel,
+                    input = self.summarize(up_to_seq, request) => input,
+                    _ = clock.sleep(remaining) => Input::Tick(clock.now()),
+                }
+            }
         }
     }
 
@@ -172,7 +191,41 @@ impl Driver {
         }
     }
 
-    async fn run_tool(&mut self, call: &ToolCall) -> Input {
+    /// Lässt das Modell den alten Verlauf zusammenfassen; Deltas gehen dabei nicht an den Kanal.
+    async fn summarize(&self, up_to_seq: u64, request: Request) -> Input {
+        let mut stream = match self.agent.provider.stream(request).await {
+            Ok(stream) => stream,
+            Err(error) => return Input::CompactFailed(error.to_string()),
+        };
+        let mut assembler = Assembler::default();
+        while let Some(item) = stream.next().await {
+            if let Err(error) = item.and_then(|chunk| assembler.push(chunk)) {
+                return Input::CompactFailed(error.to_string());
+            }
+        }
+        match assembler.finish() {
+            Ok((message, ..)) => Input::Compacted {
+                up_to_seq,
+                summary: Message::assistant(message.text()),
+            },
+            Err(error) => Input::CompactFailed(error.to_string()),
+        }
+    }
+
+    /// Führt die gemeinsam gestarteten Tools aus, höchstens `MAX_PARALLEL_TOOLS` gleichzeitig.
+    /// Die Ergebnisse kommen in der Reihenfolge der Aufrufe zurück, nicht der Fertigstellung.
+    async fn run_tools(&self, effects: Vec<Effect>) -> Vec<Input> {
+        let calls = effects.into_iter().filter_map(|effect| match effect {
+            Effect::RunTool(call) => Some(call),
+            _ => None,
+        });
+        futures::stream::iter(calls.map(|call| async move { self.run_tool(&call).await }))
+            .buffered(MAX_PARALLEL_TOOLS)
+            .collect()
+            .await
+    }
+
+    async fn run_tool(&self, call: &ToolCall) -> Input {
         let call_id = call.id;
         let Some(tool) = self.agent.tools.get(&call.name) else {
             let output = ToolOutput::text(format!("Unbekanntes Tool: {}", call.name));

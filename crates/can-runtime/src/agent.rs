@@ -64,6 +64,15 @@ impl Agent {
         self.start(session, None, true).await
     }
 
+    /// Wie [`Agent::run`], aber ohne Mensch: jede Rückfrage wird zur Ablehnung.
+    pub async fn run_unattended(
+        &self,
+        session: SessionId,
+        input: impl Into<Message>,
+    ) -> Result<Run, RunError> {
+        self.start(session, Some(input.into()), false).await
+    }
+
     /// Kurzform: liefert nur das Ergebnis und behandelt `Ask` als `Deny`.
     pub async fn complete(
         &self,
@@ -277,6 +286,7 @@ impl AgentBuilder {
         let (Some(provider), true) = (self.provider, problems.is_empty()) else {
             return Err(BuildError { problems });
         };
+        let capabilities = provider.capabilities(&model);
         let config = RunConfig {
             model,
             system: self.system,
@@ -284,6 +294,8 @@ impl AgentBuilder {
             limits: self.limits,
             max_output: self.max_output,
             extra: self.extra,
+            context_window: capabilities.context_window,
+            reserve_output: self.max_output.unwrap_or(capabilities.max_output),
         };
         Ok(Agent {
             inner: Arc::new(Inner {

@@ -20,6 +20,7 @@ pub enum Behavior {
     Fatal,
     Panic,
     Hang,
+    Sleep,
 }
 
 /// Tool mit einstellbarem Verhalten, das seine Aufrufe zählt.
@@ -61,7 +62,7 @@ impl Tool for TestTool {
         &self.spec
     }
 
-    async fn call(&self, args: Value, _cx: &ToolCtx) -> Result<ToolOutput, ToolError> {
+    async fn call(&self, args: Value, cx: &ToolCtx) -> Result<ToolOutput, ToolError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         match self.behavior {
             Behavior::Echo => Ok(ToolOutput::text(format!(
@@ -71,7 +72,15 @@ impl Tool for TestTool {
             Behavior::ForModel => Err(ToolError::ForModel("Datei nicht gefunden".into())),
             Behavior::Fatal => Err(ToolError::Fatal(BoxError::from("Platte weg"))),
             Behavior::Panic => panic!("absichtlicher Panic im Test-Tool"),
-            Behavior::Hang => std::future::pending().await,
+            // Hängt, bis der Aufruf abgebrochen wird, und räumt dann sofort auf.
+            Behavior::Hang => {
+                cx.cancel.cancelled().await;
+                Err(ToolError::ForModel("abgebrochen".into()))
+            }
+            Behavior::Sleep => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Ok(ToolOutput::text("ausgeschlafen"))
+            }
         }
     }
 }

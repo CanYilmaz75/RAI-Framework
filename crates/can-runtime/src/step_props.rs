@@ -18,6 +18,8 @@ enum Action {
     Done(usize, bool),
     Fatal(usize),
     Stray,
+    Compacted(u64),
+    CompactFailed,
     Cancel,
     Tick(u64),
 }
@@ -34,6 +36,8 @@ fn actions() -> impl Strategy<Value = Vec<Action>> {
         8 => (0usize..4, any::<bool>()).prop_map(|(i, e)| Action::Done(i, e)),
         1 => (0usize..4).prop_map(Action::Fatal),
         1 => Just(Action::Stray),
+        2 => (0u64..40).prop_map(Action::Compacted),
+        1 => Just(Action::CompactFailed),
         1 => Just(Action::Cancel),
         1 => (0u64..120_000).prop_map(Action::Tick),
     ];
@@ -81,6 +85,11 @@ fn input(action: &Action, state: &RunState, counter: u128) -> Input {
             output: ToolOutput::text("?"),
             is_error: false,
         },
+        Action::Compacted(up_to_seq) => Input::Compacted {
+            up_to_seq: *up_to_seq,
+            summary: Message::assistant("kurz"),
+        },
+        Action::CompactFailed => Input::CompactFailed("kaputt".into()),
         Action::Cancel => Input::Cancel,
         Action::Tick(now) => Input::Tick(Timestamp(*now)),
     }

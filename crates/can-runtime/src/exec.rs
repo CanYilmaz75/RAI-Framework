@@ -6,6 +6,9 @@ use std::time::Duration;
 use can_core::{OutputBlock, Tool, ToolCall, ToolCtx, ToolError, ToolOutput};
 use tokio_util::sync::CancellationToken;
 
+/// So lange darf ein Tool nach dem Abbruchsignal aufräumen, bevor seine Task beendet wird.
+const CLEANUP_GRACE: Duration = Duration::from_secs(5);
+
 /// Ausgang eines Tool-Aufrufs aus Sicht des Treibers.
 pub(crate) enum ToolRun {
     Done {
@@ -59,8 +62,12 @@ pub(crate) async fn run_tool(
         _ = clock.sleep(run_remaining) => ToolRun::Deadline,
     };
     if !task.is_finished() {
+        // Sauberes Ende: das Tool bekommt das Abbruchsignal und eine Frist zum Aufräumen.
         tool_cancel.cancel();
-        task.abort();
+        tokio::select! {
+            _ = &mut task => {}
+            _ = clock.sleep(CLEANUP_GRACE) => task.abort(),
+        }
     }
     outcome
 }

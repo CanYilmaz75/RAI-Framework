@@ -1,11 +1,12 @@
 //! Die reine Schrittfunktion: entscheidet, macht aber selbst nie Ein- oder Ausgabe.
 
 use can_core::{
-    Approver, CallId, CallStatus, Decision, Event, FinishReason, LimitKind, Message, Phase,
-    ProviderError, Request, RunState, StopReason, Timestamp, ToolCall, ToolOutput, Usage,
+    Approver, CallId, CallStatus, Decision, Effect as ToolEffect, Event, FinishReason, LimitKind,
+    Message, Phase, ProviderError, Request, RunState, StopReason, Timestamp, ToolCall, ToolOutput,
+    Usage,
 };
 
-use crate::context::build_request;
+use crate::context::{KEEP_ROUNDS, build_request, compaction_due, plan_compaction};
 
 /// Ergebnis eines Schritts: Events zum Speichern und Anwenden, Effekte zum Ausführen.
 #[derive(Debug, Default, PartialEq)]
@@ -46,6 +47,13 @@ pub enum Input {
         call_id: CallId,
         message: String,
     },
+    /// Die Zusammenfassung des Verlaufs bis `up_to_seq` liegt vor.
+    Compacted {
+        up_to_seq: u64,
+        summary: Message,
+    },
+    /// Die Zusammenfassung ist gescheitert.
+    CompactFailed(String),
     Cancel,
     Tick(Timestamp),
 }
@@ -56,6 +64,11 @@ pub enum Effect {
     CallModel(Request),
     CheckPolicy(ToolCall),
     RunTool(ToolCall),
+    /// Den Verlauf bis `up_to_seq` mit dieser Anfrage zusammenfassen lassen.
+    Compact {
+        up_to_seq: u64,
+        request: Request,
+    },
 }
 
 /// Entscheidet anhand von Zustand und Eingabe. Deterministisch und total: unpassende Eingaben
@@ -88,9 +101,34 @@ pub fn step(state: &RunState, input: Input) -> Step {
         ) => {
             em.model_done(message, usage, stop);
         }
+        (Phase::AwaitModel, Input::ModelFailed(ProviderError::ContextTooLong { limit })) => {
+            // Genau ein weiterer Versuch pro Verdichtung: gibt es nichts mehr zu verdichten, endet der Lauf.
+            let plan = plan_compaction(state, KEEP_ROUNDS).or_else(|| plan_compaction(state, 1));
+            match plan {
+                Some((up_to_seq, request)) => {
+                    em.out.effects.push(Effect::Compact { up_to_seq, request })
+                }
+                None => em.finish(FinishReason::Error {
+                    message: ProviderError::ContextTooLong { limit }.to_string(),
+                }),
+            }
+        }
         (Phase::AwaitModel, Input::ModelFailed(error)) => {
             em.finish(FinishReason::Error {
                 message: error.to_string(),
+            });
+        }
+        (Phase::AwaitModel, Input::Compacted { up_to_seq, summary })
+            if em.compaction_fits(up_to_seq) =>
+        {
+            em.emit(Event::Compacted { up_to_seq, summary });
+            em.out
+                .effects
+                .push(Effect::CallModel(build_request(&em.state)));
+        }
+        (Phase::AwaitModel, Input::CompactFailed(message)) => {
+            em.finish(FinishReason::Error {
+                message: format!("Verdichtung fehlgeschlagen: {message}"),
             });
         }
         (
@@ -195,6 +233,16 @@ impl Emitter {
             .is_some_and(|pending| pending.status == CallStatus::Started)
     }
 
+    /// Eine Verdichtung muss über die letzte hinausgehen und darf nichts Künftiges ersetzen.
+    fn compaction_fits(&self, up_to_seq: u64) -> bool {
+        let previous = self
+            .state
+            .compaction
+            .as_ref()
+            .map(|compaction| compaction.up_to_seq);
+        up_to_seq < self.state.next_seq && previous.is_none_or(|previous| up_to_seq > previous)
+    }
+
     /// Nächste Modellanfrage, oder Ende des Laufs am Schrittlimit.
     fn request_model(&mut self) {
         let next = self.state.step.saturating_add(1);
@@ -204,9 +252,16 @@ impl Emitter {
             });
         }
         self.emit(Event::ModelRequested { step: next });
-        self.out
-            .effects
-            .push(Effect::CallModel(build_request(&self.state)));
+        self.call_model_or_compact();
+    }
+
+    /// Ist das Kontextfenster zu 80 % voll, wird vor der Anfrage erst verdichtet.
+    fn call_model_or_compact(&mut self) {
+        let effect = match compaction_due(&self.state) {
+            Some((up_to_seq, request)) => Effect::Compact { up_to_seq, request },
+            None => Effect::CallModel(build_request(&self.state)),
+        };
+        self.out.effects.push(effect);
     }
 
     fn model_done(&mut self, message: Message, usage: Usage, stop: StopReason) {
@@ -236,8 +291,16 @@ impl Emitter {
         }
     }
 
-    /// Sobald alle Aufrufe entschieden sind: Tools einzeln in Modellreihenfolge starten, danach
-    /// das Modell erneut fragen. Solange ein Tool läuft oder Entscheidungen fehlen, passiert nichts.
+    fn read_only(&self, call: &ToolCall) -> bool {
+        self.state
+            .config
+            .tool(&call.name)
+            .is_some_and(|spec| spec.effect == ToolEffect::ReadOnly)
+    }
+
+    /// Sobald alle Aufrufe entschieden sind: Tools in Modellreihenfolge starten, danach das
+    /// Modell erneut fragen. Aufeinanderfolgende lesende Tools starten gemeinsam und laufen
+    /// parallel; alles andere läuft einzeln. Solange ein Tool läuft, passiert nichts.
     fn advance(&mut self) {
         if self.state.phase != Phase::RunTools {
             return;
@@ -253,12 +316,24 @@ impl Emitter {
         {
             return;
         }
-        let next = self
+        let waiting = self
             .state
             .pending
             .iter()
-            .find(|pending| pending.status == CallStatus::Allowed);
-        if let Some(call) = next.map(|pending| pending.call.clone()) {
+            .filter(|pending| pending.status == CallStatus::Allowed);
+        let waiting: Vec<ToolCall> = waiting.map(|pending| pending.call.clone()).collect();
+        let Some(first) = waiting.first() else {
+            return;
+        };
+        let batch = if self.read_only(first) {
+            waiting
+                .iter()
+                .take_while(|call| self.read_only(call))
+                .count()
+        } else {
+            1
+        };
+        for call in waiting.into_iter().take(batch) {
             self.emit(Event::ToolStarted { call_id: call.id });
             self.out.effects.push(Effect::RunTool(call));
         }
@@ -267,10 +342,7 @@ impl Emitter {
     /// Wiederaufnahme: was im Log begonnen, aber nicht beendet wurde, wird nachgeholt.
     fn resume(&mut self) {
         match self.state.phase {
-            Phase::AwaitModel => self
-                .out
-                .effects
-                .push(Effect::CallModel(build_request(&self.state))),
+            Phase::AwaitModel => self.call_model_or_compact(),
             Phase::AwaitPolicy => {
                 let open = self
                     .state
@@ -286,30 +358,31 @@ impl Emitter {
                     .state
                     .pending
                     .iter()
-                    .find(|p| p.status == CallStatus::Started);
-                match started.map(|pending| pending.call.clone()) {
-                    Some(call)
-                        if self
-                            .state
-                            .config
-                            .tool(&call.name)
-                            .is_some_and(|s| s.idempotent) =>
+                    .filter(|p| p.status == CallStatus::Started);
+                let started: Vec<ToolCall> = started.map(|pending| pending.call.clone()).collect();
+                for call in started {
+                    if self
+                        .state
+                        .config
+                        .tool(&call.name)
+                        .is_some_and(|spec| spec.idempotent)
                     {
                         self.out.effects.push(Effect::RunTool(call));
-                    }
-                    Some(call) => {
+                    } else {
                         // Nicht idempotent: nie unbemerkt doppelt ausführen.
                         self.tool_error(call.id, "Unterbrochen, Ausgang unbekannt.");
-                        self.advance();
                     }
-                    None => self.advance(),
                 }
+                self.advance();
             }
             Phase::Idle | Phase::Done => {}
         }
     }
 }
 
+#[cfg(test)]
+#[path = "step_context_tests.rs"]
+mod context_tests;
 #[cfg(test)]
 #[path = "step_edge_tests.rs"]
 mod edge_tests;

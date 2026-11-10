@@ -77,6 +77,7 @@ pub(super) fn effects(step: &Step) -> Vec<&'static str> {
             Effect::CallModel(_) => "call_model",
             Effect::CheckPolicy(_) => "check_policy",
             Effect::RunTool(_) => "run_tool",
+            Effect::Compact { .. } => "compact",
         })
         .collect()
 }
