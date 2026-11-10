@@ -66,6 +66,20 @@ pub async fn read_text(cx: &ToolCtx, path: &str) -> Result<String, ToolError> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// Schreibt eine Textdatei im Arbeitsverzeichnis und legt fehlende Ordner an.
+pub async fn write_text(cx: &ToolCtx, path: &str, content: &str) -> Result<String, ToolError> {
+    let resolved = resolve(&cx.workdir, path)?;
+    if let Some(parent) = resolved.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| for_model(format!("Ordner nicht anlegbar: {path} ({error})")))?;
+    }
+    tokio::fs::write(&resolved, content)
+        .await
+        .map_err(|error| for_model(format!("Datei nicht schreibbar: {path} ({error})")))?;
+    Ok(format!("{} Bytes nach {path} geschrieben.", content.len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +137,26 @@ mod tests {
         assert!(message(resolve(dir.path(), "link/geheim.txt")).contains("außerhalb"));
         assert!(message(resolve(dir.path(), "link/neu.txt")).contains("außerhalb"));
         assert!(message(resolve(dir.path(), "leer")).contains("nicht auflösbar"));
+    }
+
+    #[tokio::test]
+    async fn write_text_creates_folders_and_stays_inside() {
+        let dir = TempDir::new();
+        let cx = dir.ctx();
+        assert_eq!(
+            write_text(&cx, "neu/a.txt", "hallo").await.unwrap(),
+            "5 Bytes nach neu/a.txt geschrieben."
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("neu/a.txt")).unwrap(),
+            "hallo"
+        );
+        assert!(
+            matches!(write_text(&cx, "../raus.txt", "x").await, Err(ToolError::ForModel(m)) if m.contains("außerhalb"))
+        );
+        assert!(
+            matches!(write_text(&cx, "neu", "x").await, Err(ToolError::ForModel(m)) if m.contains("nicht schreibbar"))
+        );
     }
 
     #[tokio::test]
