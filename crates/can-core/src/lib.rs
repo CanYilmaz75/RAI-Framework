@@ -3,6 +3,7 @@
 //! Alle anderen Crates hängen nur von diesem ab; `core` kennt keinen von ihnen.
 
 pub mod assemble;
+mod base64;
 pub mod clock;
 pub mod event;
 pub mod ids;
@@ -31,7 +32,7 @@ pub use provider::{
 };
 pub use rules::{Rule, RuleSet};
 pub use secret::{Secret, SecretsHandle};
-pub use state::{CallStatus, Limits, PendingCall, Phase, RunConfig, RunState};
+pub use state::{CallStatus, Compaction, Limits, PendingCall, Phase, RunConfig, RunState};
 pub use store::{MemoryStore, Store, StoreError};
 pub use tool::{Effect, ProgressSink, Tool, ToolCtx, ToolError, ToolSpec};
 

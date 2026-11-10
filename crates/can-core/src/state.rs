@@ -39,6 +39,12 @@ pub struct RunConfig {
     pub limits: Limits,
     pub max_output: Option<u32>,
     pub extra: Map<String, Value>,
+    /// Kontextfenster des Modells in Token; null heißt unbekannt, dann wird nie kompaktiert.
+    #[serde(default)]
+    pub context_window: u32,
+    /// Token, die für die Antwort des Modells frei bleiben müssen.
+    #[serde(default)]
+    pub reserve_output: u32,
 }
 
 impl RunConfig {
@@ -93,6 +99,13 @@ impl PendingCall {
     }
 }
 
+/// Stand der Kontextverdichtung: alles bis `up_to_seq` ist durch `summary` ersetzt.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Compaction {
+    pub up_to_seq: u64,
+    pub summary: Message,
+}
+
 /// Der gesamte Zustand einer Sitzung samt laufendem Lauf.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunState {
@@ -101,6 +114,12 @@ pub struct RunState {
     pub run_id: Option<RunId>,
     /// Gesprächsverlauf der Sitzung über alle Läufe.
     pub messages: Vec<Message>,
+    /// Position des Events, das die jeweilige Nachricht erzeugt hat; parallel zu `messages`.
+    pub message_seqs: Vec<u64>,
+    /// Position der Eingabe des aktuellen Laufs, der ursprünglichen Aufgabe.
+    pub task_seq: Option<u64>,
+    /// Letzte Kontextverdichtung; die Originale bleiben in `messages` und im Store.
+    pub compaction: Option<Compaction>,
     /// Zahl der Modellanfragen im aktuellen Lauf.
     pub step: u32,
     /// Tool-Aufrufe der letzten Modellantwort, in der Reihenfolge des Modells.
@@ -121,6 +140,9 @@ impl RunState {
             phase: Phase::Idle,
             run_id: None,
             messages: Vec::new(),
+            message_seqs: Vec::new(),
+            task_seq: None,
+            compaction: None,
             step: 0,
             pending: Vec::new(),
             usage: Usage::default(),
@@ -141,7 +163,7 @@ impl RunState {
 
     /// Wendet ein dauerhaftes Event samt Position, Lauf und Zeit an.
     pub fn apply_envelope(&mut self, envelope: &Envelope) {
-        self.next_seq = envelope.seq.saturating_add(1);
+        self.next_seq = envelope.seq;
         self.apply(&envelope.event);
         if matches!(envelope.event, Event::RunStarted { .. }) {
             self.run_id = Some(envelope.run_id);
@@ -151,9 +173,15 @@ impl RunState {
 
     /// Die einzige Stelle, die Zustand verändert.
     pub fn apply(&mut self, event: &Event) {
+        // Ein dauerhaftes Event belegt die Position `next_seq` und rückt sie um eins weiter.
+        let seq = self.next_seq;
+        if event.is_durable() {
+            self.next_seq = seq.saturating_add(1);
+        }
         match event {
             Event::RunStarted { input, .. } => {
-                self.messages.push(input.clone());
+                self.push_message(input.clone(), seq);
+                self.task_seq = Some(seq);
                 self.phase = Phase::AwaitModel;
                 self.step = 0;
                 self.pending.clear();
@@ -167,7 +195,7 @@ impl RunState {
                 self.phase = Phase::AwaitModel;
             }
             Event::ModelResponded { message, usage, .. } => {
-                self.messages.push(message.clone());
+                self.push_message(message.clone(), seq);
                 self.usage.add(*usage);
             }
             Event::ToolRequested { call } => {
@@ -189,7 +217,7 @@ impl RunState {
                     crate::event::Decision::Ask => CallStatus::AwaitingApproval,
                 };
                 self.set_status(*call_id, status);
-                self.settle();
+                self.settle(seq);
             }
             Event::ToolStarted { call_id } => {
                 self.set_status(*call_id, CallStatus::Started);
@@ -205,15 +233,20 @@ impl RunState {
                     is_error: *is_error,
                 };
                 self.set_status(*call_id, status);
-                self.settle();
+                self.settle(seq);
             }
             Event::RunFinished { reason } => {
-                self.close_pending();
+                self.close_pending(seq);
                 self.phase = Phase::Done;
                 self.finish = Some(reason.clone());
             }
-            // Flüchtig bzw. erst mit der Kontextverwaltung (Phase 5) von Bedeutung.
-            Event::TextDelta { .. } | Event::Compacted { .. } => {}
+            Event::Compacted { up_to_seq, summary } => {
+                self.compaction = Some(Compaction {
+                    up_to_seq: *up_to_seq,
+                    summary: summary.clone(),
+                });
+            }
+            Event::TextDelta { .. } => {}
         }
     }
 
@@ -238,6 +271,11 @@ impl RunState {
             .unwrap_or_default()
     }
 
+    fn push_message(&mut self, message: Message, seq: u64) {
+        self.messages.push(message);
+        self.message_seqs.push(seq);
+    }
+
     fn set_status(&mut self, id: CallId, status: CallStatus) {
         if let Some(pending) = self
             .pending
@@ -250,7 +288,7 @@ impl RunState {
 
     /// Nach jeder Entscheidung und jedem Ergebnis: Sind alle Aufrufe entschieden, geht es in
     /// `RunTools`; sind alle fertig, wandern die Ergebnisse in Aufrufreihenfolge in den Verlauf.
-    fn settle(&mut self) {
+    fn settle(&mut self, seq: u64) {
         if self.pending.is_empty() || self.pending.iter().any(PendingCall::is_unresolved) {
             return;
         }
@@ -260,12 +298,12 @@ impl RunState {
             .iter()
             .all(|pending| matches!(pending.status, CallStatus::Finished { .. }))
         {
-            self.close_pending();
+            self.close_pending(seq);
         }
     }
 
     /// Schreibt für jeden offenen Aufruf ein Ergebnis in den Verlauf, damit dieser gültig bleibt.
-    fn close_pending(&mut self) {
+    fn close_pending(&mut self, seq: u64) {
         if self.pending.is_empty() {
             return;
         }
@@ -287,10 +325,13 @@ impl RunState {
                 },
             })
             .collect();
-        self.messages.push(Message {
-            role: Role::Tool,
-            content,
-        });
+        self.push_message(
+            Message {
+                role: Role::Tool,
+                content,
+            },
+            seq,
+        );
     }
 }
 

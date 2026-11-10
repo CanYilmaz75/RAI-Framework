@@ -248,6 +248,7 @@ fn volatile_and_unknown_ids_change_nothing() {
         call_id: CallId::from_parts(9, 9),
     });
     state.phase = before.phase;
+    state.next_seq = before.next_seq;
     assert_eq!(state, before);
 }
 
@@ -273,4 +274,28 @@ fn config_digest_and_tool_lookup() {
     assert!(config.tool("read_file").is_some());
     assert!(config.tool("fehlt").is_none());
     assert_eq!(Limits::default().max_steps, 50);
+}
+
+#[test]
+fn messages_remember_their_seq_and_compaction_is_recorded() {
+    let mut state = started();
+    state.apply(&Event::ModelResponded {
+        step: 1,
+        message: Message::assistant("eins"),
+        usage: Usage::default(),
+        stop: StopReason::EndTurn,
+    });
+    assert_eq!(state.message_seqs, vec![0, 2]);
+    assert_eq!((state.task_seq, state.next_seq), (Some(0), 3));
+    state.apply(&Event::TextDelta {
+        step: 1,
+        text: "x".into(),
+    });
+    assert_eq!(state.next_seq, 3, "flüchtige Events belegen keine Position");
+    state.apply(&Event::Compacted {
+        up_to_seq: 0,
+        summary: Message::assistant("kurz"),
+    });
+    assert_eq!(state.compaction.as_ref().map(|c| c.up_to_seq), Some(0));
+    assert_eq!(state.messages.len(), 2, "die Originale bleiben erhalten");
 }
