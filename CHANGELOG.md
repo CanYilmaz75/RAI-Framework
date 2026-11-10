@@ -2,6 +2,16 @@
 
 ## Unveröffentlicht
 
+### Phase 3: Speicher, Fortsetzen, Record/Replay
+
+- `agentkit-store`: `SqliteStore` mit Schema für Sitzungen, Events und Blobs, Migrationen beim
+  Öffnen, WAL und `synchronous = FULL`; gemeinsame Testsuite mit `MemoryStore`
+- `Agent::resume` und `agentkit resume <id>` setzen einen unterbrochenen Lauf fort; ein nicht
+  idempotentes Tool läuft dabei nie doppelt
+- `Recording` schreibt Modellantworten in eine Datei, `FakeProvider::from_recording` spielt sie ab
+- `agentkit chat` speichert Sitzungen in SQLite (`--db`, `--session`, `--record`)
+- Test, der den Lauf nach jedem einzelnen Event abbricht und fortsetzt
+
 ### Phase 2: Tool-Makro und Policy
 
 - `agentkit-macros`: `#[tool]` leitet Name, Beschreibung und JSON-Schema aus einer `async fn` ab

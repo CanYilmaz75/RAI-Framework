@@ -9,17 +9,18 @@ durch eine Policy.
 
 ## Stand
 
-Phase 1 und 2 von 6 sind fertig: Kern und erster Lauf, Tool-Makro und Policy.
+Phase 1 bis 3 von 6 sind fertig: Kern und erster Lauf, Tool-Makro und Policy, Speicher mit
+Fortsetzen und Record/Replay. Das ist das nutzbare Minimum aus dem Bauplan.
 
 | Crate | Aufgabe |
 | --- | --- |
 | `agentkit-core` | Typen (`Message`, `Event`, `RunState`), die Traits `Provider`, `Tool`, `Store`, `Policy`, `Clock`, dazu `RuleSet` und die Schema-Prüfung. Kein Netzwerk. |
-| `agentkit-providers` | `FakeProvider` für Tests, OpenAI-kompatibler Provider mit SSE-Streaming (Feature `openai`) |
+| `agentkit-providers` | `FakeProvider` für Tests, `Recording` zum Mitschneiden, OpenAI-kompatibler Provider mit SSE-Streaming (Feature `openai`) |
 | `agentkit-runtime` | Schrittfunktion `step`, Treiber, `Agent`-Builder, Limits, Abbruch |
 | `agentkit-tools` | `read_file`, `write_file` und `shell`, begrenzt auf das Arbeitsverzeichnis |
-| `agentkit-store` | `MemoryStore` (SQLite folgt in Phase 3) |
+| `agentkit-store` | `MemoryStore` und `SqliteStore` (Feature `sqlite`) mit Migrationen |
 | `agentkit-macros` | `#[tool]` macht aus einer `async fn` ein Tool samt JSON-Schema |
-| `agentkit-cli` | Binary `agentkit` mit dem Befehl `chat` |
+| `agentkit-cli` | Binary `agentkit` mit den Befehlen `chat` und `resume` |
 
 ## Ausprobieren
 
@@ -31,6 +32,10 @@ cargo run -p agentkit-runtime --example minimal
 
 ```bash
 cargo run -p agentkit-runtime --example policy
+```
+
+```bash
+cargo run -p agentkit-runtime --example resume
 ```
 
 Mit einem echten Modell über eine OpenAI-kompatible API (auch Ollama):
@@ -71,6 +76,27 @@ let outcome = run.outcome().await?;
 
 `agent.complete(...)` ist die Kurzform: Sie liefert nur das Ergebnis und behandelt jede Rückfrage
 als Ablehnung.
+
+## Speichern, Fortsetzen, Replay
+
+Die CLI schreibt jede Sitzung in eine SQLite-Datei (Vorgabe `agentkit.db`) und gibt beim Start die
+Kennung der Sitzung aus. Jedes Event ist gespeichert, bevor die nächste Wirkung nach außen passiert.
+
+```bash
+cargo run -p agentkit-cli -- chat --session <kennung> "Und weiter?"
+```
+
+```bash
+cargo run -p agentkit-cli -- resume <kennung>
+```
+
+`resume` setzt einen unterbrochenen Lauf fort. Lief gerade ein Tool, wird es nur wiederholt, wenn
+es als idempotent deklariert ist; sonst bekommt das Modell das Ergebnis „Unterbrochen, Ausgang
+unbekannt“ und entscheidet selbst. So läuft keine Schreibaktion unbemerkt doppelt.
+
+Mit `--record antworten.jsonl` schreibt `chat` die Modellantworten mit.
+`FakeProvider::from_recording("antworten.jsonl")` spielt sie in Tests wieder ab und ergibt dieselbe
+Event-Folge.
 
 ## Ein eigenes Tool
 

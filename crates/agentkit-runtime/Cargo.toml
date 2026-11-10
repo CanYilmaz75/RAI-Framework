@@ -17,6 +17,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+agentkit-store = { workspace = true, features = ["sqlite"] }
 agentkit-macros.workspace = true
 agentkit-providers.workspace = true
 proptest.workspace = true
@@ -32,3 +33,7 @@ path = "../../examples/minimal.rs"
 [[example]]
 name = "policy"
 path = "../../examples/policy.rs"
+
+[[example]]
+name = "resume"
+path = "../../examples/resume.rs"
