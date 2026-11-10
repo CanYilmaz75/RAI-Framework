@@ -1,0 +1,29 @@
+[package]
+name = "can-cli"
+description = "Binary zum Ausprobieren."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+can-core.workspace = true
+can-providers = { workspace = true, features = ["openai", "anthropic"] }
+can-tools = { workspace = true, features = ["http", "mcp"] }
+can-store = { workspace = true, features = ["sqlite"] }
+can-runtime.workspace = true
+clap.workspace = true
+serde.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["net", "time"] }
+[lints]
+workspace = true
+
+[[bin]]
+name = "can"
+path = "src/main.rs"

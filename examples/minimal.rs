@@ -3,12 +3,12 @@
 //! Läuft ohne Netzwerk und ohne Schlüssel, weil der Fake-Provider die Modellantworten liefert:
 //!
 //! ```text
-//! cargo run -p agentkit-runtime --example minimal
+//! cargo run -p can-runtime --example minimal
 //! ```
 
-use agentkit_core::{Effect, Event, SessionId, Tool, ToolCtx, ToolError, ToolOutput, ToolSpec};
-use agentkit_providers::FakeProvider;
-use agentkit_runtime::Agent;
+use can_core::{Effect, Event, SessionId, Tool, ToolCtx, ToolError, ToolOutput, ToolSpec};
+use can_providers::FakeProvider;
+use can_runtime::Agent;
 use serde_json::{Value, json};
 
 /// Ein von Hand geschriebenes Tool: liefert die Länge eines Textes.
