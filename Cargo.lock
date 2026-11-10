@@ -255,8 +255,11 @@ dependencies = [
  "async-trait",
  "can-core",
  "can-macros",
+ "futures",
+ "reqwest",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tokio-util",
 ]

@@ -6,7 +6,15 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+http = ["dep:reqwest", "dep:futures", "tokio/net"]
+mcp = ["dep:reqwest", "dep:thiserror", "tokio/io-util", "tokio/sync"]
+
 [dependencies]
+futures = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
 can-core.workspace = true
 can-macros.workspace = true
 async-trait.workspace = true
@@ -15,8 +23,13 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "macros"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util"] }
 tokio-util.workspace = true
+
+[[bin]]
+name = "can-mcp-echo"
+path = "src/bin/can_mcp_echo.rs"
+required-features = ["mcp"]
 
 [lints]
 workspace = true
