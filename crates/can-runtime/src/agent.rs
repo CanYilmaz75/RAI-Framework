@@ -15,6 +15,7 @@ use tracing::Instrument;
 
 use crate::clock::SystemClock;
 use crate::driver::Driver;
+use crate::redact::Redactor;
 use crate::registry::Registry;
 use crate::run::{Outcome, Run, RunError};
 use crate::step::Input;
@@ -31,6 +32,7 @@ pub(crate) struct Inner {
     pub(crate) config: RunConfig,
     pub(crate) workdir: PathBuf,
     pub(crate) secrets: SecretsHandle,
+    pub(crate) redactor: Redactor,
 }
 
 /// Ein fertig konfigurierter Agent. Billig zu klonen.
@@ -243,7 +245,7 @@ impl AgentBuilder {
         self
     }
 
-    /// Schlüssel, die Tools sehen dürfen.
+    /// Schlüssel, die Tools sehen dürfen. Ihre Werte werden aus allen Events geschwärzt.
     pub fn secrets(mut self, secrets: SecretsHandle) -> Self {
         self.secrets = secrets;
         self
@@ -306,6 +308,7 @@ impl AgentBuilder {
                 clock: self.clock.unwrap_or_else(|| Arc::new(SystemClock)),
                 config,
                 workdir,
+                redactor: Redactor::new(&self.secrets),
                 secrets: self.secrets,
             }),
         })

@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use can_core::{
     Approver, Assembler, Chunk, Decision, Envelope, Event, FinishReason, Message, Phase,
-    ProgressSink, Request, RunId, RunState, SCHEMA_VERSION, SessionId, ToolCall, ToolCtx,
-    ToolOutput,
+    ProgressSink, ProviderError, Request, RunId, RunState, SCHEMA_VERSION, SessionId, ToolCall,
+    ToolCtx, ToolOutput,
 };
 use futures::StreamExt;
 use tokio::sync::mpsc::{self, error::TrySendError};
@@ -17,6 +17,16 @@ use crate::agent::Inner;
 use crate::exec::{self, ToolRun};
 use crate::run::{Command, Outcome, RunError};
 use crate::step::{Effect, Input, step};
+
+/// So oft wird ein mittendrin abgebrochener Antwort-Strom neu angefragt.
+const MAX_STREAM_RESTARTS: u32 = 2;
+
+fn is_transient(error: &ProviderError) -> bool {
+    matches!(
+        error,
+        ProviderError::Network(_) | ProviderError::Overloaded | ProviderError::RateLimited { .. }
+    )
+}
 
 /// So viele Tools laufen höchstens gleichzeitig.
 const MAX_PARALLEL_TOOLS: usize = 4;
@@ -45,7 +55,7 @@ impl Driver {
                 None if matches!(self.state.phase, Phase::Done | Phase::Idle) => break,
                 None => self.wait().await,
             };
-            let step = step(&self.state, input);
+            let step = step(&self.state, self.redact(input));
             self.commit(step.events).await?;
             let (tools, others): (Vec<Effect>, Vec<Effect>) = step
                 .effects
@@ -64,6 +74,45 @@ impl Driver {
         })
     }
 
+    /// Schwärzt, was von Modell und Tools kommt, bevor die Schrittfunktion daraus Events und
+    /// die nächste Anfrage baut.
+    fn redact(&self, input: Input) -> Input {
+        let redactor = &self.agent.redactor;
+        match input {
+            Input::ModelDone {
+                message,
+                usage,
+                stop,
+            } => Input::ModelDone {
+                message: redactor.value(message),
+                usage,
+                stop,
+            },
+            Input::ToolDone {
+                call_id,
+                output,
+                is_error,
+            } => Input::ToolDone {
+                call_id,
+                output: redactor.value(output),
+                is_error,
+            },
+            Input::ToolRejected { call_id, message } => Input::ToolRejected {
+                call_id,
+                message: redactor.text(&message),
+            },
+            Input::ToolFatal { call_id, message } => Input::ToolFatal {
+                call_id,
+                message: redactor.text(&message),
+            },
+            Input::Compacted { up_to_seq, summary } => Input::Compacted {
+                up_to_seq,
+                summary: redactor.value(summary),
+            },
+            other => other,
+        }
+    }
+
     /// Speichert die Events, bevor irgendeine weitere Wirkung nach außen passiert.
     async fn commit(&mut self, events: Vec<Event>) -> Result<(), RunError> {
         if events.is_empty() {
@@ -77,7 +126,7 @@ impl Driver {
                 run_id: self.run_id,
                 ts,
                 schema: SCHEMA_VERSION,
-                event,
+                event: self.agent.redactor.event(event),
             })
             .collect();
         self.agent.store.append(self.session, &envelopes).await?;
@@ -137,32 +186,46 @@ impl Driver {
         }
     }
 
+    /// Fragt das Modell. Bricht der Strom mittendrin mit einem vorübergehenden Fehler ab, wird
+    /// die Teilantwort verworfen und der Schritt neu angefragt.
     async fn call_model(&mut self, request: Request) -> Input {
-        let mut stream = match self.agent.provider.stream(request).await {
-            Ok(stream) => stream,
-            Err(error) => return Input::ModelFailed(error),
-        };
+        let mut restarts = 0;
+        loop {
+            match self.stream_once(request.clone()).await {
+                Err((error, true)) if restarts < MAX_STREAM_RESTARTS && is_transient(&error) => {
+                    tracing::warn!(%error, "Modellantwort brach ab; der Schritt wird neu angefragt");
+                    restarts += 1;
+                }
+                Err((error, _)) => return Input::ModelFailed(error),
+                Ok(input) => return input,
+            }
+        }
+    }
+
+    /// Ein Versuch. Im Fehlerfall sagt der zweite Wert, ob schon Chunks angekommen waren.
+    async fn stream_once(&mut self, request: Request) -> Result<Input, (ProviderError, bool)> {
+        let mut stream = self
+            .agent
+            .provider
+            .stream(request)
+            .await
+            .map_err(|error| (error, false))?;
         let mut assembler = Assembler::default();
+        let mut received = false;
         while let Some(item) = stream.next().await {
-            let chunk = match item {
-                Ok(chunk) => chunk,
-                Err(error) => return Input::ModelFailed(error),
-            };
+            let chunk = item.map_err(|error| (error, received))?;
+            received = true;
             if let Chunk::TextDelta { text } = &chunk {
                 self.send_delta(text);
             }
-            if let Err(error) = assembler.push(chunk) {
-                return Input::ModelFailed(error);
-            }
+            assembler.push(chunk).map_err(|error| (error, false))?;
         }
-        match assembler.finish() {
-            Ok((message, usage, stop)) => Input::ModelDone {
-                message,
-                usage,
-                stop,
-            },
-            Err(error) => Input::ModelFailed(error),
-        }
+        let (message, usage, stop) = assembler.finish().map_err(|error| (error, false))?;
+        Ok(Input::ModelDone {
+            message,
+            usage,
+            stop,
+        })
     }
 
     /// Reihenfolge: Tool nachschlagen, Argumente prüfen, dann die Policy fragen.
@@ -266,7 +329,7 @@ impl Driver {
 
     /// Flüchtig: bei vollem Kanal wird der Text gesammelt statt zu blockieren.
     fn send_delta(&mut self, text: &str) {
-        self.delta.push_str(text);
+        self.delta.push_str(&self.agent.redactor.text(text));
         let envelope = self.delta_envelope();
         match self.events.try_send(envelope) {
             Ok(()) | Err(TrySendError::Closed(_)) => {}
