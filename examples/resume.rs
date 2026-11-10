@@ -2,14 +2,14 @@
 //! zweite lädt das Log aus SQLite und macht dort weiter.
 //!
 //! ```text
-//! cargo run -p agentkit-runtime --example resume
+//! cargo run -p can-runtime --example resume
 //! ```
 
-use agentkit_core::{Decision, Event, RuleSet, SessionId, ToolError};
-use agentkit_macros::tool;
-use agentkit_providers::FakeProvider;
-use agentkit_runtime::Agent;
-use agentkit_store::SqliteStore;
+use can_core::{Decision, Event, RuleSet, SessionId, ToolError};
+use can_macros::tool;
+use can_providers::FakeProvider;
+use can_runtime::Agent;
+use can_store::SqliteStore;
 use serde_json::json;
 
 /// Legt eine Notiz ab (hier nur zum Schein).
@@ -33,7 +33,7 @@ fn agent(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db = std::env::temp_dir().join(format!("agentkit-beispiel-{}.db", SessionId::new()));
+    let db = std::env::temp_dir().join(format!("can-beispiel-{}.db", SessionId::new()));
     let session = SessionId::new();
 
     // Erster Prozess: läuft bis zur Rückfrage und verschwindet dann, ohne aufzuräumen.

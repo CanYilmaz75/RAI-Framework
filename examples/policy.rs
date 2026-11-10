@@ -4,13 +4,13 @@
 //! der zweite abgelehnt; die Ablehnung geht als Fehlerergebnis ans Modell zurück.
 //!
 //! ```text
-//! cargo run -p agentkit-runtime --example policy
+//! cargo run -p can-runtime --example policy
 //! ```
 
-use agentkit_core::{Decision, Event, RuleSet, SessionId, ToolError};
-use agentkit_macros::tool;
-use agentkit_providers::FakeProvider;
-use agentkit_runtime::Agent;
+use can_core::{Decision, Event, RuleSet, SessionId, ToolError};
+use can_macros::tool;
+use can_providers::FakeProvider;
+use can_runtime::Agent;
 use serde_json::json;
 
 /// Legt eine Notiz ab (hier nur zum Schein).

@@ -1,7 +1,7 @@
-# RAI-Framework (`agentkit`)
+# Can
 
-Ein eigenständiges AI-Agent-Framework in Rust: ein Cargo-Workspace ohne fremde Agent-Frameworks.
-`agentkit` ist ein Arbeitsname.
+Can ist ein eigenständiges AI-Agent-Framework in Rust: ein Cargo-Workspace ohne fremde Agent-Frameworks.
+
 
 Der Kern ist eine reine Schrittfunktion ohne Ein- und Ausgabe. Alles, was in einem Lauf passiert,
 ist ein Event; der Zustand entsteht nur durch Falten der Event-Folge. Jeder Tool-Aufruf läuft
@@ -14,40 +14,40 @@ Fortsetzen und Record/Replay. Das ist das nutzbare Minimum aus dem Bauplan.
 
 | Crate | Aufgabe |
 | --- | --- |
-| `agentkit-core` | Typen (`Message`, `Event`, `RunState`), die Traits `Provider`, `Tool`, `Store`, `Policy`, `Clock`, dazu `RuleSet` und die Schema-Prüfung. Kein Netzwerk. |
-| `agentkit-providers` | `FakeProvider` für Tests, `Recording` zum Mitschneiden, OpenAI-kompatibler Provider mit SSE-Streaming (Feature `openai`) |
-| `agentkit-runtime` | Schrittfunktion `step`, Treiber, `Agent`-Builder, Limits, Abbruch |
-| `agentkit-tools` | `read_file`, `write_file` und `shell`, begrenzt auf das Arbeitsverzeichnis |
-| `agentkit-store` | `MemoryStore` und `SqliteStore` (Feature `sqlite`) mit Migrationen |
-| `agentkit-macros` | `#[tool]` macht aus einer `async fn` ein Tool samt JSON-Schema |
-| `agentkit-cli` | Binary `agentkit` mit den Befehlen `chat` und `resume` |
+| `can-core` | Typen (`Message`, `Event`, `RunState`), die Traits `Provider`, `Tool`, `Store`, `Policy`, `Clock`, dazu `RuleSet` und die Schema-Prüfung. Kein Netzwerk. |
+| `can-providers` | `FakeProvider` für Tests, `Recording` zum Mitschneiden, OpenAI-kompatibler Provider mit SSE-Streaming (Feature `openai`) |
+| `can-runtime` | Schrittfunktion `step`, Treiber, `Agent`-Builder, Limits, Abbruch |
+| `can-tools` | `read_file`, `write_file` und `shell`, begrenzt auf das Arbeitsverzeichnis |
+| `can-store` | `MemoryStore` und `SqliteStore` (Feature `sqlite`) mit Migrationen |
+| `can-macros` | `#[tool]` macht aus einer `async fn` ein Tool samt JSON-Schema |
+| `can-cli` | Binary `can` mit den Befehlen `chat` und `resume` |
 
 ## Ausprobieren
 
 Ohne Netzwerk und ohne Schlüssel, mit dem Fake-Provider:
 
 ```bash
-cargo run -p agentkit-runtime --example minimal
+cargo run -p can-runtime --example minimal
 ```
 
 ```bash
-cargo run -p agentkit-runtime --example policy
+cargo run -p can-runtime --example policy
 ```
 
 ```bash
-cargo run -p agentkit-runtime --example resume
+cargo run -p can-runtime --example resume
 ```
 
 Mit einem echten Modell über eine OpenAI-kompatible API (auch Ollama):
 
 ```bash
-export AGENTKIT_BASE_URL=http://localhost:11434/v1   # Vorgabe: https://api.openai.com/v1
-export AGENTKIT_API_KEY=...                          # für Ollama nicht nötig
-export AGENTKIT_MODEL=mein-modell
-cargo run -p agentkit-cli -- chat "Fasse README.md zusammen"
+export CAN_BASE_URL=http://localhost:11434/v1   # Vorgabe: https://api.openai.com/v1
+export CAN_API_KEY=...                          # für Ollama nicht nötig
+export CAN_MODEL=mein-modell
+cargo run -p can-cli -- chat "Fasse README.md zusammen"
 ```
 
-Ohne Frage startet `agentkit chat` ein Gespräch, das Zeile für Zeile von der Standardeingabe liest.
+Ohne Frage startet `can chat` ein Gespräch, das Zeile für Zeile von der Standardeingabe liest.
 Lesen ist erlaubt; vor jedem Schreiben und vor jedem `shell`-Aufruf fragt die CLI im Terminal nach.
 
 ## Als Bibliothek
@@ -79,15 +79,15 @@ als Ablehnung.
 
 ## Speichern, Fortsetzen, Replay
 
-Die CLI schreibt jede Sitzung in eine SQLite-Datei (Vorgabe `agentkit.db`) und gibt beim Start die
+Die CLI schreibt jede Sitzung in eine SQLite-Datei (Vorgabe `can.db`) und gibt beim Start die
 Kennung der Sitzung aus. Jedes Event ist gespeichert, bevor die nächste Wirkung nach außen passiert.
 
 ```bash
-cargo run -p agentkit-cli -- chat --session <kennung> "Und weiter?"
+cargo run -p can-cli -- chat --session <kennung> "Und weiter?"
 ```
 
 ```bash
-cargo run -p agentkit-cli -- resume <kennung>
+cargo run -p can-cli -- resume <kennung>
 ```
 
 `resume` setzt einen unterbrochenen Lauf fort. Lief gerade ein Tool, wird es nur wiederholt, wenn

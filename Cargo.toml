@@ -9,12 +9,12 @@ rust-version = "1.88"
 publish = false
 
 [workspace.dependencies]
-agentkit-core = { path = "crates/agentkit-core" }
-agentkit-providers = { path = "crates/agentkit-providers" }
-agentkit-macros = { path = "crates/agentkit-macros" }
-agentkit-tools = { path = "crates/agentkit-tools" }
-agentkit-store = { path = "crates/agentkit-store" }
-agentkit-runtime = { path = "crates/agentkit-runtime" }
+can-core = { path = "crates/can-core" }
+can-providers = { path = "crates/can-providers" }
+can-macros = { path = "crates/can-macros" }
+can-tools = { path = "crates/can-tools" }
+can-store = { path = "crates/can-store" }
+can-runtime = { path = "crates/can-runtime" }
 
 async-trait = "0.1"
 clap = { version = "4", features = ["derive", "env"] }
