@@ -4,14 +4,13 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 
-use agentkit_core::{CallId, Decision, Event, ProviderError, Secret, SessionId, ToolCall};
+use agentkit_core::{CallId, Decision, Event, ProviderError, RuleSet, Secret, SessionId, ToolCall};
 use agentkit_providers::OpenAiCompat;
 use agentkit_runtime::{Agent, BuildError, Outcome, RunError};
-use agentkit_tools::ReadFile;
+use agentkit_tools::{ReadFile, shell, write_file};
 
 /// Vorgabe für den System-Prompt.
-pub const DEFAULT_SYSTEM: &str =
-    "Du bist ein hilfreicher Assistent. Nutze die Tools, wenn du Dateien lesen musst.";
+pub const DEFAULT_SYSTEM: &str = "Du bist ein hilfreicher Assistent. Nutze die Tools, um Dateien zu lesen, zu schreiben oder Programme zu starten.";
 
 /// Fehler der CLI.
 #[derive(Debug, thiserror::Error)]
@@ -40,7 +39,8 @@ pub struct Options {
     pub base_url: Option<String>,
 }
 
-/// Baut den Agenten mit OpenAI-kompatiblem Provider und dem Tool `read_file`.
+/// Baut den Agenten mit OpenAI-kompatiblem Provider und den Tools `read_file`, `write_file`
+/// und `shell`. Lesen ist erlaubt; Schreiben und `shell` fragen nach.
 pub fn build_agent(options: &Options) -> Result<Agent, CliError> {
     let model = options
         .model
@@ -69,7 +69,10 @@ pub fn build_agent(options: &Options) -> Result<Agent, CliError> {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_SYSTEM.to_owned()),
         )
-        .tool(ReadFile::new());
+        .tool(ReadFile::new())
+        .tool(write_file)
+        .tool(shell)
+        .policy(RuleSet::safe_defaults());
     if let Some(workdir) = &options.workdir {
         builder = builder.workdir(workdir.clone());
     }

@@ -92,7 +92,13 @@ fn workdir() -> PathBuf {
 fn assert_tool_round(requests: &[Value]) {
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0]["model"], "test-modell");
-    assert_eq!(requests[0]["tools"][0]["function"]["name"], "read_file");
+    let tools: Vec<&str> = requests[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(tools, ["read_file", "shell", "write_file"]);
     let messages = requests[1]["messages"].as_array().unwrap();
     let tool = messages
         .iter()
@@ -170,6 +176,63 @@ async fn binary_streams_the_answer_to_stdout() {
     assert!(stdout.ends_with("Die Geheimzahl ist 4711.\n"), "{stdout}");
     assert_tool_round(&requests.lock().unwrap());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Eine Antwort mit einem Aufruf von `write_file`, danach eine Textantwort.
+fn write_script() -> Vec<String> {
+    let call = json!({"index": 0, "id": "call_1", "type": "function", "function": {
+        "name": "write_file", "arguments": "{\"path\":\"neu.txt\",\"content\":\"hallo\"}"}});
+    vec![
+        sse(&[
+            json!({"choices": [{"index": 0, "delta": {"tool_calls": [call]}}]}),
+            json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}),
+        ]),
+        sse(&[
+            json!({"choices": [{"index": 0, "delta": {"content": "Erledigt."}}]}),
+            json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+        ]),
+    ]
+}
+
+/// `Ask` löst eine Rückfrage aus; erst die Antwort entscheidet, ob geschrieben wird.
+#[tokio::test]
+async fn write_file_asks_first_and_obeys_the_answer() {
+    for (answer, written) in [(Decision::Allow, true), (Decision::Deny, false)] {
+        let (base_url, requests) = mock_api(write_script()).await;
+        let dir = workdir();
+        let options = Options {
+            model: Some("test-modell".into()),
+            workdir: Some(dir.clone()),
+            base_url: Some(base_url),
+            ..Options::default()
+        };
+        let agent = build_agent(&options).unwrap();
+        let mut asked = Vec::new();
+        let mut approve = |call: &agentkit_core::ToolCall| {
+            asked.push(call.name.clone());
+            answer
+        };
+        let mut out = Vec::new();
+        chat_turn(
+            &agent,
+            SessionId::new(),
+            "Schreib neu.txt",
+            &mut out,
+            &mut approve,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(asked, ["write_file"]);
+        assert_eq!(dir.join("neu.txt").exists(), written);
+        let requests = requests.lock().unwrap();
+        let messages = requests[1]["messages"].as_array().unwrap();
+        let result = messages.iter().find(|m| m["role"] == "tool").unwrap()["content"]
+            .as_str()
+            .unwrap();
+        assert_eq!(result.contains("abgelehnt"), !written, "{result}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[test]
