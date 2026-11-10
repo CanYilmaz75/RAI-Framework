@@ -8,5 +8,18 @@ publish.workspace = true
 
 [dependencies]
 agentkit-core.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time", "macros"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+agentkit-providers.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+
 [lints]
 workspace = true
