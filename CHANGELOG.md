@@ -2,6 +2,29 @@
 
 ## Unveröffentlicht
 
+### Umbenennung
+
+- Das Projekt heißt jetzt Can: Crates `can-*`, Binary `can`, Umgebungsvariablen `CAN_*`,
+  Datenbank `can.db`
+
+### Phase 5: Kontext und Parallelität
+
+- Kompaktierung ab 80 % des Kontextfensters und nach `ContextTooLong`, mit Vorstufe, die alte
+  Tool-Ausgaben durch eine Vorschau ersetzt; Event `Compacted`, das Log bleibt vollständig
+- Lesende Tools einer Antwort laufen parallel (höchstens vier), Ergebnisse in Aufrufreihenfolge
+- `SubAgent`: ein Agent als Tool mit eigenem Budget und eigener Policy
+- Abbruch gibt laufenden Tools fünf Sekunden zum Aufräumen
+- `Retry`: Wiederholung bei Rate-Limit, Überlast und Netzwerkfehlern mit Backoff und Jitter
+
+### Phase 4: MCP und zweiter Provider
+
+- MCP-Client über stdio und HTTP; Tools heißen `<server>__<tool>`; Beispielserver `can-mcp-echo`
+- Anthropic-Provider hinter dem Feature `anthropic`
+- Gemeinsame Provider-Testsuite gegen einen lokalen Server
+- Bilder in Nutzernachrichten für beide Provider, `can chat --image`
+- Tool `http_fetch` mit Host-Freigabeliste und Sperre privater Adressen
+- Konfigurationsdatei `can.toml`: Provider, Modell, Limits, Regeln, HTTP-Hosts, MCP-Server
+
 ### Phase 3: Speicher, Fortsetzen, Record/Replay
 
 - `can-store`: `SqliteStore` mit Schema für Sitzungen, Events und Blobs, Migrationen beim
