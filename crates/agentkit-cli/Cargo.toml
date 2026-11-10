@@ -1,0 +1,20 @@
+[package]
+name = "agentkit-cli"
+description = "Binary zum Ausprobieren."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+agentkit-core.workspace = true
+agentkit-providers.workspace = true
+agentkit-tools.workspace = true
+agentkit-store.workspace = true
+agentkit-runtime.workspace = true
+[lints]
+workspace = true
+
+[[bin]]
+name = "agentkit"
+path = "src/main.rs"

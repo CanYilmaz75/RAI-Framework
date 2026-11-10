@@ -1,0 +1,1 @@
+//! Attribut-Makro #[tool].

@@ -1,0 +1,12 @@
+[package]
+name = "agentkit-core"
+description = "Typen, Traits und Fehler des Agent-Frameworks. Kein Netzwerk."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

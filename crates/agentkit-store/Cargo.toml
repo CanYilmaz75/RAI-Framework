@@ -1,0 +1,12 @@
+[package]
+name = "agentkit-store"
+description = "Sitzungen und Event-Verlauf."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+agentkit-core.workspace = true
+[lints]
+workspace = true
