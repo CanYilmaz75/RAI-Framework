@@ -34,6 +34,29 @@ pub(crate) enum Command {
     Resolve { call_id: CallId, decision: Decision },
 }
 
+/// Steuerung eines Laufs, getrennt vom Event-Strom und frei kopierbar: so kann eine Stelle
+/// die Events lesen, während eine andere Freigaben erteilt oder abbricht.
+#[derive(Clone)]
+pub struct RunController {
+    commands: mpsc::Sender<Command>,
+    cancel: CancellationToken,
+}
+
+impl RunController {
+    /// Beantwortet ein `ApprovalNeeded` mit `Allow` oder `Deny`.
+    pub async fn resolve(&self, call_id: CallId, decision: Decision) -> Result<(), RunError> {
+        self.commands
+            .send(Command::Resolve { call_id, decision })
+            .await
+            .map_err(|_| RunError::Closed)
+    }
+
+    /// Bricht den Lauf ab; er endet mit `FinishReason::Cancelled`.
+    pub fn cancel(&self) {
+        self.cancel.cancel();
+    }
+}
+
 /// Ein laufender Lauf. Wird das Handle verworfen, bricht der Lauf ab.
 pub struct Run {
     events: mpsc::Receiver<Envelope>,
@@ -80,6 +103,14 @@ impl Run {
             .send(Command::Resolve { call_id, decision })
             .await
             .map_err(|_| RunError::Closed)
+    }
+
+    /// Steuerung, die unabhängig vom Handle weitergegeben werden kann.
+    pub fn controller(&self) -> RunController {
+        RunController {
+            commands: self.commands.clone(),
+            cancel: self.cancel.clone(),
+        }
     }
 
     /// Bricht den Lauf ab; er endet mit `FinishReason::Cancelled`.
