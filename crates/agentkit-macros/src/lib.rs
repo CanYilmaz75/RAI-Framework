@@ -1,1 +1,1 @@
-//! Attribut-Makro #[tool].
+//! Attribut-Makro `#[tool]`.
