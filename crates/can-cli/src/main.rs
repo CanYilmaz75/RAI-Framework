@@ -4,7 +4,10 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use can_cli::{App, CliError, Options, Terminal, build_app, chat_turn, resume_turn};
+use can_cli::config::ProviderKind;
+use can_cli::{
+    App, CliError, Config, Options, Terminal, build_app, chat_turn, resume_turn, user_message,
+};
 use can_core::{Decision, FinishReason, SessionId, ToolCall};
 use can_runtime::Outcome;
 use clap::{Args, Parser, Subcommand};
@@ -34,24 +37,38 @@ struct Common {
     /// Basis-URL der OpenAI-kompatiblen API.
     #[arg(long, env = "CAN_BASE_URL")]
     base_url: Option<String>,
-    /// SQLite-Datei, in der die Sitzungen gespeichert werden.
-    #[arg(long, default_value = "can.db")]
-    db: PathBuf,
+    /// Anbieter der API: openai (auch Ollama und andere kompatible) oder anthropic.
+    #[arg(long, env = "CAN_PROVIDER")]
+    provider: Option<ProviderKind>,
+    /// Konfigurationsdatei; ohne Angabe gilt can.toml im aktuellen Verzeichnis, falls vorhanden.
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// SQLite-Datei, in der die Sitzungen gespeichert werden (Vorgabe: can.db).
+    #[arg(long)]
+    db: Option<PathBuf>,
     /// Modellantworten für ein späteres Replay in diese Datei schreiben.
     #[arg(long)]
     record: Option<PathBuf>,
 }
 
 impl Common {
-    fn app(self) -> Result<App, CliError> {
+    async fn app(self) -> Result<App, CliError> {
+        let config = Config::load(self.config.as_deref())?;
+        let db = self
+            .db
+            .or_else(|| config.db.clone())
+            .unwrap_or_else(|| PathBuf::from("can.db"));
         build_app(&Options {
             model: self.model,
             system: self.system,
             workdir: self.workdir,
             base_url: self.base_url,
-            db: Some(self.db),
+            provider: self.provider,
+            db: Some(db),
             record: self.record,
+            config,
         })
+        .await
     }
 }
 
@@ -64,6 +81,9 @@ enum Command {
         /// Vorhandene Sitzung weiterführen statt eine neue zu beginnen.
         #[arg(long)]
         session: Option<SessionId>,
+        /// Bilddatei (png, jpg, gif, webp), die der ersten Frage beiliegt; mehrfach möglich.
+        #[arg(long)]
+        image: Vec<PathBuf>,
         #[command(flatten)]
         common: Common,
     },
@@ -103,6 +123,7 @@ async fn chat(
     app: App,
     session: Option<SessionId>,
     prompt: Option<String>,
+    mut images: Vec<PathBuf>,
 ) -> Result<(), CliError> {
     let session = session.unwrap_or_default();
     eprintln!("Sitzung: {session}");
@@ -113,7 +134,7 @@ async fn chat(
             out: &mut out,
             approve: &mut approve,
         };
-        report(&chat_turn(&app, session, &prompt, terminal).await?);
+        report(&chat_turn(&app, session, user_message(&prompt, &images)?, terminal).await?);
         return Ok(());
     }
     loop {
@@ -124,11 +145,13 @@ async fn chat(
             return Ok(());
         }
         if !line.trim().is_empty() {
+            // Bilder liegen nur der ersten Frage bei.
+            let input = user_message(line.trim(), &std::mem::take(&mut images))?;
             let terminal = Terminal {
                 out: &mut out,
                 approve: &mut approve,
             };
-            report(&chat_turn(&app, session, line.trim(), terminal).await?);
+            report(&chat_turn(&app, session, input, terminal).await?);
         }
     }
 }
@@ -138,10 +161,11 @@ async fn run(command: Command) -> Result<(), CliError> {
         Command::Chat {
             prompt,
             session,
+            image,
             common,
-        } => chat(common.app()?, session, prompt).await,
+        } => chat(common.app().await?, session, prompt, image).await,
         Command::Resume { session, common } => {
-            let app = common.app()?;
+            let app = common.app().await?;
             let (mut out, mut approve) = (std::io::stdout(), ask_user);
             let terminal = Terminal {
                 out: &mut out,

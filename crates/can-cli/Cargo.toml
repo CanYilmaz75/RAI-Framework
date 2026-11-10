@@ -8,11 +8,13 @@ publish.workspace = true
 
 [dependencies]
 can-core.workspace = true
-can-providers = { workspace = true, features = ["openai"] }
-can-tools.workspace = true
+can-providers = { workspace = true, features = ["openai", "anthropic"] }
+can-tools = { workspace = true, features = ["http", "mcp"] }
 can-store = { workspace = true, features = ["sqlite"] }
 can-runtime.workspace = true
 clap.workspace = true
+serde.workspace = true
+toml.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 

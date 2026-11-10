@@ -1,0 +1,40 @@
+# Beispiel für can.toml. Ohne --config liest `can` die Datei can.toml im aktuellen Verzeichnis.
+# Schlüssel stehen nie in dieser Datei, nur der Name der Umgebungsvariablen.
+
+model = "mein-modell"
+system = "Du bist ein hilfreicher Assistent."
+# workdir = "."
+# db = "can.db"
+
+[provider]
+kind = "openai"                      # oder "anthropic"
+# base_url = "http://localhost:11434/v1"
+# api_key_env = "MEIN_SCHLUESSEL"
+
+[limits]
+max_steps = 50
+max_tokens = 200000
+timeout_secs = 600
+
+# Regeln gelten zusätzlich zu den sicheren Vorgaben; die strengste gewinnt.
+[[policy.rules]]
+tool = "write_file"
+args = { path = "notizen/*" }
+decision = "allow"
+
+[[policy.rules]]
+tool = "write_file"
+args = { path = "*.env" }
+decision = "deny"
+
+# Ohne freigegebene Hosts gibt es das Tool http_fetch nicht.
+[http]
+allowed_hosts = ["example.com", "*.example.org"]
+
+# MCP-Server: entweder command (stdio) oder url (HTTP). Ihre Tools heißen <name>__<tool>.
+# [mcp.servers.dateien]
+# command = "mein-mcp-server"
+# args = ["--root", "."]
+#
+# [mcp.servers.suche]
+# url = "http://localhost:8080/mcp"

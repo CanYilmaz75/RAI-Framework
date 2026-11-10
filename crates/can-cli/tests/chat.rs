@@ -123,7 +123,7 @@ async fn chat_turn_answers_a_question_that_needs_read_file() {
         base_url: Some(base_url),
         ..Options::default()
     };
-    let app = build_app(&options).unwrap();
+    let app = build_app(&options).await.unwrap();
     let mut out = Vec::new();
     let mut approve = |_: &can_core::ToolCall| Decision::Deny;
     let outcome = chat_turn(
@@ -210,7 +210,7 @@ async fn write_file_asks_first_and_obeys_the_answer() {
             base_url: Some(base_url),
             ..Options::default()
         };
-        let app = build_app(&options).unwrap();
+        let app = build_app(&options).await.unwrap();
         let mut asked = Vec::new();
         let mut approve = |call: &can_core::ToolCall| {
             asked.push(call.name.clone());
@@ -241,9 +241,9 @@ async fn write_file_asks_first_and_obeys_the_answer() {
     }
 }
 
-#[test]
-fn missing_model_is_a_config_error() {
-    let error = build_app(&Options::default()).err().unwrap();
+#[tokio::test]
+async fn missing_model_is_a_config_error() {
+    let error = build_app(&Options::default()).await.err().unwrap();
     assert!(matches!(error, CliError::Config(_)));
     assert!(error.to_string().contains("--model"));
 }
@@ -263,7 +263,7 @@ async fn resume_continues_an_interrupted_run_from_the_database() {
         ..Options::default()
     };
     let session = SessionId::new();
-    let app = build_app(&options).unwrap();
+    let app = build_app(&options).await.unwrap();
     let mut run = app.agent.run(session, "Schreib neu.txt").await.unwrap();
     loop {
         if matches!(

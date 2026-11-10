@@ -1,21 +1,21 @@
-//! Bibliotheksteil der CLI: Agent bauen und einen Gesprächszug im Terminal ausgeben.
+//! Bibliotheksteil der CLI: Konfiguration lesen, Agent bauen, einen Gesprächszug ausgeben.
+
+mod app;
+pub mod config;
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::Path;
 
 use can_core::{
-    CallId, Decision, Event, MemoryStore, Provider, ProviderError, RuleSet, Secret, SessionId,
-    Store, StoreError, ToolCall,
+    Bytes, CallId, ContentBlock, Decision, Event, Message, ProviderError, Role, SessionId,
+    StoreError, ToolCall,
 };
-use can_providers::{OpenAiCompat, Recording};
-use can_runtime::{Agent, BuildError, Outcome, Run, RunError};
-use can_store::SqliteStore;
-use can_tools::{ReadFile, shell, write_file};
+use can_runtime::{BuildError, Outcome, Run, RunError};
+use can_tools::McpError;
 
-/// Vorgabe für den System-Prompt.
-pub const DEFAULT_SYSTEM: &str = "Du bist ein hilfreicher Assistent. Nutze die Tools, um Dateien zu lesen, zu schreiben oder Programme zu starten.";
+pub use app::{App, DEFAULT_SYSTEM, Options, build_app};
+pub use config::Config;
 
 /// Fehler der CLI.
 #[derive(Debug, thiserror::Error)]
@@ -30,79 +30,43 @@ pub enum CliError {
     Run(#[from] RunError),
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error(transparent)]
+    Mcp(#[from] McpError),
     #[error("Ein-/Ausgabefehler: {0}")]
     Io(#[from] std::io::Error),
 }
 
-/// Einstellungen, aus denen der Agent gebaut wird.
-#[derive(Clone, Debug, Default)]
-pub struct Options {
-    /// Modellname; Pflicht.
-    pub model: Option<String>,
-    pub system: Option<String>,
-    /// Arbeitsverzeichnis der Tools; Vorgabe ist das aktuelle Verzeichnis.
-    pub workdir: Option<PathBuf>,
-    /// Basis-URL der API; ohne Angabe gelten die Umgebungsvariablen.
-    pub base_url: Option<String>,
-    /// SQLite-Datei für Sitzungen; ohne Angabe bleibt alles im Arbeitsspeicher.
-    pub db: Option<PathBuf>,
-    /// Datei, in die die Modellantworten für ein späteres Replay geschrieben werden.
-    pub record: Option<PathBuf>,
-}
-
-/// Der Agent samt dem Store, in dem seine Sitzungen liegen.
-pub struct App {
-    pub agent: Agent,
-    pub store: Arc<dyn Store>,
-}
-
-/// Baut den Agenten mit OpenAI-kompatiblem Provider und den Tools `read_file`, `write_file`
-/// und `shell`. Lesen ist erlaubt; Schreiben und `shell` fragen nach.
-pub fn build_app(options: &Options) -> Result<App, CliError> {
-    let model = options
-        .model
-        .clone()
-        .filter(|model| !model.trim().is_empty())
-        .ok_or_else(|| {
-            CliError::Config("Kein Modell angegeben: --model oder CAN_MODEL setzen.".to_owned())
-        })?;
-    let provider = match &options.base_url {
-        Some(base_url) => {
-            let key = ["CAN_API_KEY", "OPENAI_API_KEY"]
-                .iter()
-                .find_map(|name| std::env::var(name).ok());
-            OpenAiCompat::new(base_url.clone(), key.map(Secret::new))
-        }
-        None => OpenAiCompat::from_env()?,
-    };
-    let provider: Arc<dyn Provider> = match &options.record {
-        Some(path) => Arc::new(Recording::new(provider, path.clone())),
-        None => Arc::new(provider),
-    };
-    let store: Arc<dyn Store> = match &options.db {
-        Some(path) => Arc::new(SqliteStore::open(path)?),
-        None => Arc::new(MemoryStore::new()),
-    };
-    let mut builder = Agent::builder()
-        .provider_arc(provider)
-        .model(model)
-        .system(
-            options
-                .system
-                .clone()
-                .unwrap_or_else(|| DEFAULT_SYSTEM.to_owned()),
-        )
-        .tool(ReadFile::new())
-        .tool(write_file)
-        .tool(shell)
-        .policy(RuleSet::safe_defaults())
-        .store_arc(store.clone());
-    if let Some(workdir) = &options.workdir {
-        builder = builder.workdir(workdir.clone());
+/// Baut die Nutzernachricht aus Text und Bilddateien. Der Bildtyp folgt aus der Dateiendung.
+pub fn user_message(text: &str, images: &[impl AsRef<Path>]) -> Result<Message, CliError> {
+    let mut content = vec![ContentBlock::Text(text.to_owned())];
+    for path in images {
+        let path = path.as_ref();
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let media_type = match extension.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            _ => {
+                return Err(CliError::Config(format!(
+                    "Unbekanntes Bildformat: {} (erlaubt: png, jpg, gif, webp)",
+                    path.display()
+                )));
+            }
+        };
+        let data = Bytes(std::fs::read(path)?);
+        content.push(ContentBlock::Image {
+            media_type: media_type.to_owned(),
+            data,
+        });
     }
-    Ok(App {
-        agent: builder.build()?,
-        store,
+    Ok(Message {
+        role: Role::User,
+        content,
     })
 }
 
@@ -117,10 +81,10 @@ pub struct Terminal<'a> {
 pub async fn chat_turn(
     app: &App,
     session: SessionId,
-    prompt: &str,
+    input: impl Into<Message>,
     terminal: Terminal<'_>,
 ) -> Result<Outcome, CliError> {
-    let run = app.agent.run(session, prompt).await?;
+    let run = app.agent.run(session, input).await?;
     drive(run, HashMap::new(), terminal).await
 }
 
