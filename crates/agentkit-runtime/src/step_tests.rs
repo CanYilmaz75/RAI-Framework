@@ -58,7 +58,7 @@ pub(super) fn model_done(calls: &[ToolCall], tokens: u64) -> Input {
 }
 
 /// Führt einen Schritt aus, wendet seine Events an und gibt ihn zurück.
-fn drive(state: &mut RunState, input: Input) -> Step {
+pub(super) fn drive(state: &mut RunState, input: Input) -> Step {
     let step = step(state, input);
     for event in &step.events {
         state.apply(event);
@@ -66,11 +66,11 @@ fn drive(state: &mut RunState, input: Input) -> Step {
     step
 }
 
-fn kinds(step: &Step) -> Vec<&'static str> {
+pub(super) fn kinds(step: &Step) -> Vec<&'static str> {
     step.events.iter().map(Event::kind).collect()
 }
 
-fn effects(step: &Step) -> Vec<&'static str> {
+pub(super) fn effects(step: &Step) -> Vec<&'static str> {
     step.effects
         .iter()
         .map(|effect| match effect {
@@ -81,7 +81,7 @@ fn effects(step: &Step) -> Vec<&'static str> {
         .collect()
 }
 
-fn decide(c: &ToolCall, decision: Decision) -> Input {
+pub(super) fn decide(c: &ToolCall, decision: Decision) -> Input {
     Input::PolicyDecided {
         call_id: c.id,
         decision,
@@ -89,7 +89,7 @@ fn decide(c: &ToolCall, decision: Decision) -> Input {
     }
 }
 
-fn done(c: &ToolCall) -> Input {
+pub(super) fn done(c: &ToolCall) -> Input {
     Input::ToolDone {
         call_id: c.id,
         output: ToolOutput::text("ok"),
@@ -98,14 +98,14 @@ fn done(c: &ToolCall) -> Input {
 }
 
 /// Zustand in `AwaitModel` nach dem Start.
-fn awaiting_model() -> RunState {
+pub(super) fn awaiting_model() -> RunState {
     let mut state = RunState::new(config());
     drive(&mut state, Input::Start(Message::user("hi")));
     state
 }
 
 /// Zustand in `AwaitPolicy` mit den angegebenen Aufrufen.
-fn awaiting_policy(calls: &[ToolCall]) -> RunState {
+pub(super) fn awaiting_policy(calls: &[ToolCall]) -> RunState {
     let mut state = awaiting_model();
     drive(&mut state, model_done(calls, 1));
     state
@@ -342,84 +342,4 @@ fn limits_end_the_run() {
             limit: LimitKind::Steps
         })
     );
-}
-
-#[test]
-fn done_accepts_a_new_start_and_nothing_else() {
-    let mut state = awaiting_model();
-    drive(&mut state, model_done(&[], 1));
-    for input in [
-        Input::Cancel,
-        Input::Resume,
-        Input::Tick(Timestamp(u64::MAX)),
-        model_done(&[], 1),
-    ] {
-        assert_eq!(step(&state, input), Step::default());
-    }
-    let again = drive(&mut state, Input::Start(Message::user("weiter")));
-    assert_eq!(kinds(&again), ["run_started", "model_requested"]);
-    assert_eq!(state.step, 1);
-}
-
-#[test]
-fn inputs_that_do_not_fit_the_phase_are_ignored() {
-    let a = call(1, "read");
-    let idle = RunState::new(config());
-    assert_eq!(step(&idle, Input::Cancel), Step::default());
-    assert_eq!(step(&idle, Input::Resume), Step::default());
-    let model = awaiting_model();
-    assert_eq!(step(&model, done(&a)), Step::default());
-    assert_eq!(
-        step(&model, Input::Start(Message::user("nochmal"))),
-        Step::default()
-    );
-    let policy = awaiting_policy(std::slice::from_ref(&a));
-    assert_eq!(
-        step(&policy, decide(&call(9, "read"), Decision::Allow)),
-        Step::default()
-    );
-    assert_eq!(step(&policy, done(&a)), Step::default(), "nicht gestartet");
-    assert_eq!(step(&policy, model_done(&[], 1)), Step::default());
-}
-
-#[test]
-fn resume_repeats_what_the_log_left_open() {
-    let (a, b) = (call(1, "read"), call(2, "write"));
-
-    let model = awaiting_model();
-    assert_eq!(effects(&step(&model, Input::Resume)), ["call_model"]);
-
-    let mut policy = awaiting_policy(&[a.clone(), b.clone()]);
-    drive(&mut policy, decide(&a, Decision::Allow));
-    let step_policy = step(&policy, Input::Resume);
-    assert_eq!(
-        step_policy.effects,
-        vec![Effect::CheckPolicy(b.clone())],
-        "nur der offene Aufruf"
-    );
-    assert!(step_policy.events.is_empty());
-
-    // Idempotentes Tool lief gerade: erneut ausführen.
-    let mut tools = awaiting_policy(&[a.clone(), b.clone()]);
-    drive(&mut tools, decide(&a, Decision::Allow));
-    drive(&mut tools, decide(&b, Decision::Allow));
-    let rerun = step(&tools, Input::Resume);
-    assert!(rerun.events.is_empty());
-    assert_eq!(rerun.effects, vec![Effect::RunTool(a.clone())]);
-
-    // Nicht idempotentes Tool lief gerade: Ergebnis „unterbrochen“, nie doppelt ausführen.
-    drive(&mut tools, done(&a));
-    let interrupted = drive(&mut tools, Input::Resume);
-    assert_eq!(kinds(&interrupted), ["tool_finished", "model_requested"]);
-    assert_eq!(effects(&interrupted), ["call_model"]);
-    let Event::ToolFinished {
-        call_id,
-        output,
-        is_error,
-    } = &interrupted.events[0]
-    else {
-        panic!()
-    };
-    assert_eq!((*call_id, *is_error), (b.id, true));
-    assert_eq!(output.as_text(), "Unterbrochen, Ausgang unbekannt.");
 }

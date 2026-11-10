@@ -311,6 +311,9 @@ impl Emitter {
 }
 
 #[cfg(test)]
+#[path = "step_edge_tests.rs"]
+mod edge_tests;
+#[cfg(test)]
 #[path = "step_props.rs"]
 mod props;
 #[cfg(test)]
