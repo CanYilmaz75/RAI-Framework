@@ -1,5 +1,10 @@
 //! Zustandsbehafteter SSE-Parser, der beliebig zerschnittene Byte-Blöcke annimmt.
 
+use std::collections::VecDeque;
+
+use can_core::{Chunk, ProviderError, ProviderStream};
+use futures::{Stream, StreamExt};
+
 /// Ein vollständiges Server-Sent Event.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SseEvent {
@@ -72,6 +77,70 @@ impl SseParser {
             _ => {}
         }
     }
+}
+
+/// Ein Element des normalisierten Chunk-Stroms.
+pub(crate) type Item = Result<Chunk, ProviderError>;
+
+/// Übersetzt die SSE-Events eines Anbieters in normalisierte Chunks.
+pub(crate) trait SseDecoder: Send + 'static {
+    /// Verarbeitet ein Event und hängt die daraus entstehenden Chunks an.
+    fn on_event(&mut self, event: &SseEvent, out: &mut VecDeque<Item>);
+    /// Der Byte-Strom ist zu Ende.
+    fn on_end(&mut self, out: &mut VecDeque<Item>);
+    /// Kommt nach diesem Stand nichts mehr?
+    fn is_finished(&self) -> bool;
+}
+
+struct State<S, D> {
+    body: S,
+    parser: SseParser,
+    decoder: D,
+    queue: VecDeque<Item>,
+    failed: bool,
+}
+
+/// Macht aus einem Strom von Byte-Blöcken den normalisierten Chunk-Strom.
+pub(crate) fn sse_stream<S, D>(body: S, decoder: D) -> ProviderStream
+where
+    S: Stream<Item = Result<Vec<u8>, ProviderError>> + Send + Unpin + 'static,
+    D: SseDecoder,
+{
+    let state = State {
+        body,
+        parser: SseParser::new(),
+        decoder,
+        queue: VecDeque::new(),
+        failed: false,
+    };
+    Box::pin(futures::stream::unfold(state, |mut state| async move {
+        loop {
+            if let Some(item) = state.queue.pop_front() {
+                return Some((item, state));
+            }
+            if state.failed || state.decoder.is_finished() {
+                return None;
+            }
+            match state.body.next().await {
+                Some(Ok(bytes)) => {
+                    for event in state.parser.feed(&bytes) {
+                        state.decoder.on_event(&event, &mut state.queue);
+                    }
+                }
+                Some(Err(error)) => {
+                    state.failed = true;
+                    state.queue.push_back(Err(error));
+                }
+                None => {
+                    if let Some(event) = state.parser.finish() {
+                        state.decoder.on_event(&event, &mut state.queue);
+                    }
+                    state.decoder.on_end(&mut state.queue);
+                    state.failed = true;
+                }
+            }
+        }
+    }))
 }
 
 #[cfg(test)]

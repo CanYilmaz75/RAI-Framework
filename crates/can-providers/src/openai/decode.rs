@@ -3,12 +3,10 @@
 use std::collections::{HashSet, VecDeque};
 
 use can_core::{CallId, Chunk, ProviderError, ProviderStream, StopReason, Usage};
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use serde_json::Value;
 
-use crate::sse::SseParser;
-
-type Item = Result<Chunk, ProviderError>;
+use crate::sse::{Item, SseDecoder, SseEvent, sse_stream};
 
 /// Zustand der Übersetzung eines einzelnen Antwort-Stroms.
 #[derive(Default)]
@@ -88,10 +86,6 @@ impl Decoder {
         }
     }
 
-    pub(crate) fn is_finished(&self) -> bool {
-        self.finished
-    }
-
     fn on_tool_call(&mut self, position: u32, call: &Value, out: &mut VecDeque<Item>) {
         let index = call
             .get("index")
@@ -140,11 +134,18 @@ impl Decoder {
     }
 }
 
-struct State<S> {
-    body: S,
-    sse: SseParser,
-    decoder: Decoder,
-    queue: VecDeque<Item>,
+impl SseDecoder for Decoder {
+    fn on_event(&mut self, event: &SseEvent, out: &mut VecDeque<Item>) {
+        self.on_data(&event.data, out);
+    }
+
+    fn on_end(&mut self, out: &mut VecDeque<Item>) {
+        Decoder::on_end(self, out);
+    }
+
+    fn is_finished(&self) -> bool {
+        self.finished
+    }
 }
 
 /// Macht aus einem Strom von Byte-Blöcken den normalisierten Chunk-Strom.
@@ -152,39 +153,7 @@ pub(crate) fn decode_body<S>(body: S) -> ProviderStream
 where
     S: Stream<Item = Result<Vec<u8>, ProviderError>> + Send + Unpin + 'static,
 {
-    let state = State {
-        body,
-        sse: SseParser::new(),
-        decoder: Decoder::default(),
-        queue: VecDeque::new(),
-    };
-    Box::pin(futures::stream::unfold(state, |mut state| async move {
-        loop {
-            if let Some(item) = state.queue.pop_front() {
-                return Some((item, state));
-            }
-            if state.decoder.is_finished() {
-                return None;
-            }
-            match state.body.next().await {
-                Some(Ok(bytes)) => {
-                    for event in state.sse.feed(&bytes) {
-                        state.decoder.on_data(&event.data, &mut state.queue);
-                    }
-                }
-                Some(Err(error)) => {
-                    state.decoder.finished = true;
-                    state.queue.push_back(Err(error));
-                }
-                None => {
-                    if let Some(event) = state.sse.finish() {
-                        state.decoder.on_data(&event.data, &mut state.queue);
-                    }
-                    state.decoder.on_end(&mut state.queue);
-                }
-            }
-        }
-    }))
+    sse_stream(body, Decoder::default())
 }
 
 #[cfg(test)]

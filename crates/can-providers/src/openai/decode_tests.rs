@@ -1,5 +1,6 @@
 use super::*;
 use can_core::{Assembler, Message};
+use futures::StreamExt;
 use serde_json::json;
 
 /// Aufgezeichnete Antwort im OpenAI-Format: Text, ein Tool-Aufruf in Fragmenten, Usage, DONE.

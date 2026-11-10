@@ -40,10 +40,30 @@ pub(crate) fn body(req: &Request) -> Value {
     Value::Object(body)
 }
 
+/// Reiner Text bleibt eine Zeichenkette; mit Bildern wird daraus eine Liste von Teilen.
+fn user_content(message: &Message) -> Value {
+    if !message
+        .content
+        .iter()
+        .any(|block| matches!(block, ContentBlock::Image { .. }))
+    {
+        return json!(message.text());
+    }
+    let parts = message.content.iter().filter_map(|block| match block {
+        ContentBlock::Text(text) => Some(json!({"type": "text", "text": text})),
+        ContentBlock::Image { media_type, data } => {
+            let url = format!("data:{media_type};base64,{}", data.to_base64());
+            Some(json!({"type": "image_url", "image_url": {"url": url}}))
+        }
+        _ => None,
+    });
+    Value::Array(parts.collect())
+}
+
 fn push_message(message: &Message, out: &mut Vec<Value>) {
     match message.role {
         Role::System => out.push(json!({"role": "system", "content": message.text()})),
-        Role::User => out.push(json!({"role": "user", "content": message.text()})),
+        Role::User => out.push(json!({"role": "user", "content": user_content(message)})),
         Role::Assistant => {
             let tool_calls: Vec<Value> = message
                 .tool_uses()
@@ -175,6 +195,27 @@ mod tests {
         assert!(body.get("tools").is_none());
         assert!(body.get("max_tokens").is_none());
         assert_eq!(body["messages"][3]["content"], "Fehler: Inhalt");
+    }
+
+    #[test]
+    fn images_become_data_urls() {
+        let mut request = conversation();
+        request.messages = vec![Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text("Was zeigt das Bild?".into()),
+                ContentBlock::Image {
+                    media_type: "image/png".into(),
+                    data: can_core::Bytes(b"foo".to_vec()),
+                },
+            ],
+        }];
+        let content = &body(&request)["messages"][1]["content"];
+        assert_eq!(
+            content[0],
+            json!({"type": "text", "text": "Was zeigt das Bild?"})
+        );
+        assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,Zm9v");
     }
 
     #[test]

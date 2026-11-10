@@ -9,6 +9,7 @@ publish.workspace = true
 [features]
 default = []
 openai = ["dep:reqwest"]
+anthropic = ["dep:reqwest"]
 
 [dependencies]
 can-core.workspace = true
@@ -20,6 +21,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util"] }
+
 [lints]
 workspace = true
