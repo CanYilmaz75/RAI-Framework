@@ -3,6 +3,7 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use can_core::{
     ByEffect, Clock, Limits, MemoryStore, Message, Phase, Policy, Provider, RunConfig, RunId,
@@ -15,6 +16,7 @@ use tracing::Instrument;
 
 use crate::clock::SystemClock;
 use crate::driver::Driver;
+use crate::redact::Redactor;
 use crate::registry::Registry;
 use crate::run::{Outcome, Run, RunError};
 use crate::step::Input;
@@ -31,6 +33,11 @@ pub(crate) struct Inner {
     pub(crate) config: RunConfig,
     pub(crate) workdir: PathBuf,
     pub(crate) secrets: SecretsHandle,
+    pub(crate) redactor: Redactor,
+    /// Kennung dieses Schreibers für die Sperre der Sitzungen.
+    pub(crate) owner: String,
+    /// Laufzeit der Sperre; sie wird alle `lease / 3` verlängert.
+    pub(crate) lease: Duration,
 }
 
 /// Ein fertig konfigurierter Agent. Billig zu klonen.
@@ -156,6 +163,8 @@ pub struct AgentBuilder {
     extra: Map<String, Value>,
     workdir: Option<PathBuf>,
     secrets: SecretsHandle,
+    owner: Option<String>,
+    lease: Option<Duration>,
 }
 
 impl AgentBuilder {
@@ -243,9 +252,23 @@ impl AgentBuilder {
         self
     }
 
-    /// Schlüssel, die Tools sehen dürfen.
+    /// Schlüssel, die Tools sehen dürfen. Ihre Werte werden aus allen Events geschwärzt.
     pub fn secrets(mut self, secrets: SecretsHandle) -> Self {
         self.secrets = secrets;
+        self
+    }
+
+    /// Kennung, unter der dieser Agent Sitzungen sperrt; Vorgabe ist eine zufällige pro Agent.
+    /// Derselbe Besitzer darf eine eigene Sperre sofort wieder übernehmen, etwa nach Neustart.
+    pub fn owner(mut self, owner: impl Into<String>) -> Self {
+        self.owner = Some(owner.into());
+        self
+    }
+
+    /// Laufzeit der Sitzungssperre; Vorgabe 30 Sekunden. Ein abgestürzter Schreiber gibt die
+    /// Sitzung nach dieser Zeit frei.
+    pub fn lease(mut self, lease: Duration) -> Self {
+        self.lease = Some(lease);
         self
     }
 
@@ -306,6 +329,9 @@ impl AgentBuilder {
                 clock: self.clock.unwrap_or_else(|| Arc::new(SystemClock)),
                 config,
                 workdir,
+                redactor: Redactor::new(&self.secrets),
+                owner: self.owner.unwrap_or_else(|| SessionId::new().to_string()),
+                lease: self.lease.unwrap_or(Duration::from_secs(30)),
                 secrets: self.secrets,
             }),
         })

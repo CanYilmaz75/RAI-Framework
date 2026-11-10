@@ -1,0 +1,35 @@
+[package]
+name = "can-server"
+description = "HTTP-Dienst: Sitzungen, Event-Strom, Freigaben, Mandanten."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+can-core.workspace = true
+can-providers = { workspace = true, features = ["openai", "anthropic"] }
+can-runtime.workspace = true
+can-store = { workspace = true, features = ["sqlite", "postgres"] }
+can-tools = { workspace = true, features = ["http", "mcp"] }
+async-trait.workspace = true
+axum.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio-postgres.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+can-macros.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+
+[[bin]]
+name = "can-server"
+path = "src/main.rs"
+
+[lints]
+workspace = true

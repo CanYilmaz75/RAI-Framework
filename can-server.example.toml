@@ -1,0 +1,35 @@
+# Beispiel für can-server.toml. Start: can-server can-server.toml
+# Schlüssel stehen nie in dieser Datei, nur die Namen der Umgebungsvariablen.
+
+listen = "127.0.0.1:8080"
+# worker = "worker-1"              # Vorgabe: Rechnername; muss pro Worker eindeutig sein
+
+[store]
+kind = "postgres"                  # oder "sqlite" (mit path) oder "memory" zum Ausprobieren
+url_env = "CAN_DATABASE_URL"       # postgres://nutzer:passwort@host:5432/datenbank
+
+[[agents]]
+name = "helfer"
+model = "mein-modell"
+system = "Du bist ein hilfreicher Assistent."
+provider = "openai"                # oder "anthropic"
+# base_url = "http://localhost:11434/v1"
+api_key_env = "CAN_MODEL_KEY"
+tools = ["read_file", "http_fetch"]
+workdir = "."
+http_allowed_hosts = ["example.com"]
+max_steps = 50
+
+[[agents.rules]]
+tool = "http_fetch"
+decision = "allow"
+
+[[tenants]]
+name = "acme"
+max_concurrent_runs = 8
+max_tokens = 0                     # 0 = unbegrenzt
+
+[[tenants.keys]]
+key_env = "ACME_ADA_KEY"           # mindestens 16 Zeichen
+user = "ada"
+role = "admin"                     # viewer, operator oder admin

@@ -9,16 +9,18 @@ publish.workspace = true
 [features]
 default = []
 sqlite = ["dep:rusqlite", "dep:tokio"]
+postgres = ["dep:tokio-postgres", "dep:tokio", "tokio/sync"]
 
 [dependencies]
 can-core.workspace = true
 async-trait.workspace = true
 rusqlite = { workspace = true, optional = true }
 serde_json.workspace = true
+tokio-postgres = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt"], optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 
 [lints]
 workspace = true

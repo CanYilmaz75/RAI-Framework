@@ -38,6 +38,27 @@ impl Store for CrashingStore {
         self.budget.store(left - events.len(), Ordering::SeqCst);
         self.inner.append(id, events).await
     }
+    async fn put_blob(&self, bytes: Vec<u8>) -> Result<can_core::Digest, StoreError> {
+        self.inner.put_blob(bytes).await
+    }
+
+    async fn get_blob(&self, digest: &can_core::Digest) -> Result<Option<Vec<u8>>, StoreError> {
+        self.inner.get_blob(digest).await
+    }
+
+    async fn acquire(
+        &self,
+        id: SessionId,
+        owner: &str,
+        now: Timestamp,
+        ttl: std::time::Duration,
+    ) -> Result<(), StoreError> {
+        self.inner.acquire(id, owner, now, ttl).await
+    }
+
+    async fn release(&self, id: SessionId, owner: &str) -> Result<(), StoreError> {
+        self.inner.release(id, owner).await
+    }
 }
 
 /// Modell-Ersatz ohne eigenen Zustand: die Antwort hängt nur vom Verlauf ab, damit ein

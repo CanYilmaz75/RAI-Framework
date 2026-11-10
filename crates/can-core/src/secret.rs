@@ -44,6 +44,14 @@ impl SecretsHandle {
         ))
     }
 
+    /// Alle Werte, damit die Laufzeit sie aus Events und Logs schwärzen kann.
+    pub fn values(&self) -> Vec<&str> {
+        self.0
+            .values()
+            .map(|secret| secret.expose().as_str())
+            .collect()
+    }
+
     /// Wert eines freigegebenen Schlüssels.
     pub fn get(&self, key: &str) -> Option<&str> {
         self.0.get(key).map(|secret| secret.expose().as_str())
@@ -70,6 +78,7 @@ mod tests {
         assert_eq!(handle.get("API_KEY"), Some("geheim"));
         assert_eq!(handle.get("ANDERER"), None);
         assert_eq!(SecretsHandle::empty().get("API_KEY"), None);
+        assert_eq!(handle.values(), vec!["geheim"]);
     }
 
     #[test]

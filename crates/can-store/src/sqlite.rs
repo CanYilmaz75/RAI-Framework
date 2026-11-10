@@ -2,10 +2,12 @@
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use can_core::{
-    Digest, Envelope, Event, FinishReason, SCHEMA_VERSION, SessionId, Store, StoreError,
+    Digest, Envelope, Event, FinishReason, SCHEMA_VERSION, SessionId, Store, StoreError, Timestamp,
+    store::lease_until,
 };
 use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
 
@@ -24,8 +26,6 @@ pub struct SessionInfo {
 #[derive(Clone)]
 pub struct SqliteStore {
     connection: Arc<Mutex<Connection>>,
-    /// Kennung dieses Schreibers; steht zur Diagnose in `sessions.owner`.
-    owner: String,
 }
 
 fn backend(error: impl std::error::Error + Send + Sync + 'static) -> StoreError {
@@ -54,7 +54,6 @@ impl SqliteStore {
         migrate::prepare(&mut connection).map_err(backend)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
-            owner: SessionId::new().to_string(),
         })
     }
 
@@ -93,36 +92,6 @@ impl SqliteStore {
                 sessions.push(SessionInfo { id, status, events: events.max(0) as u64 });
             }
             Ok(sessions)
-        })
-        .await
-    }
-
-    /// Legt Bytes unter ihrer Inhaltsadresse ab.
-    pub async fn put_blob(&self, bytes: Vec<u8>) -> Result<Digest, StoreError> {
-        self.with(move |connection| {
-            let digest = Digest::of(&bytes);
-            connection
-                .execute(
-                    "INSERT OR IGNORE INTO blobs (digest, bytes) VALUES (?1, ?2)",
-                    params![digest.0, bytes],
-                )
-                .map_err(backend)?;
-            Ok(digest)
-        })
-        .await
-    }
-
-    /// Liest einen Blob; `None`, wenn es ihn nicht gibt.
-    pub async fn get_blob(&self, digest: Digest) -> Result<Option<Vec<u8>>, StoreError> {
-        self.with(move |connection| {
-            connection
-                .query_row(
-                    "SELECT bytes FROM blobs WHERE digest = ?1",
-                    params![digest.0],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(backend)
         })
         .await
     }
@@ -165,7 +134,7 @@ impl Store for SqliteStore {
         let (Some(first), Some(last)) = (events.first(), events.last()) else {
             return Ok(());
         };
-        let (first_seq, first_ts, last_ts) = (first.seq, first.ts.0, last.ts.0);
+        let (first_seq, first_ts) = (first.seq, first.ts.0);
         let status = match &last.event {
             Event::RunFinished {
                 reason: FinishReason::Error { .. },
@@ -184,7 +153,7 @@ impl Store for SqliteStore {
                 payload,
             ));
         }
-        let (session, owner) = (id.to_string(), self.owner.clone());
+        let session = id.to_string();
         self.with(move |connection| {
             let transaction = connection.transaction().map_err(backend)?;
             transaction
@@ -217,8 +186,8 @@ impl Store for SqliteStore {
             }
             transaction
                 .execute(
-                    "UPDATE sessions SET status = ?2, owner = ?3, heartbeat = ?4 WHERE id = ?1",
-                    params![session, status, owner, to_i64(last_ts)],
+                    "UPDATE sessions SET status = ?2 WHERE id = ?1",
+                    params![session, status],
                 )
                 .map_err(backend)?;
             transaction.commit().map_err(|error| match error {
@@ -227,6 +196,85 @@ impl Store for SqliteStore {
                 }
                 other => backend(other),
             })
+        })
+        .await
+    }
+
+    async fn put_blob(&self, bytes: Vec<u8>) -> Result<Digest, StoreError> {
+        self.with(move |connection| {
+            let digest = Digest::of(&bytes);
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO blobs (digest, bytes) VALUES (?1, ?2)",
+                    params![digest.0, bytes],
+                )
+                .map_err(backend)?;
+            Ok(digest)
+        })
+        .await
+    }
+
+    async fn get_blob(&self, digest: &Digest) -> Result<Option<Vec<u8>>, StoreError> {
+        let digest = digest.0.clone();
+        self.with(move |connection| {
+            connection
+                .query_row(
+                    "SELECT bytes FROM blobs WHERE digest = ?1",
+                    params![digest],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(backend)
+        })
+        .await
+    }
+
+    async fn acquire(
+        &self,
+        id: SessionId,
+        owner: &str,
+        now: Timestamp,
+        ttl: Duration,
+    ) -> Result<(), StoreError> {
+        let (session, owner) = (id.to_string(), owner.to_owned());
+        let (now, until) = (to_i64(now.0), to_i64(lease_until(now, ttl).0));
+        self.with(move |connection| {
+            let transaction = connection.transaction().map_err(backend)?;
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO sessions (id, created_at, config_json, status) VALUES (?1, ?2, '{}', 'running')",
+                    params![session, now],
+                )
+                .map_err(backend)?;
+            // Nur wer die Sperre schon hält oder eine abgelaufene vorfindet, bekommt sie.
+            let changed = transaction
+                .execute(
+                    "UPDATE sessions SET owner = ?2, heartbeat = ?3
+                     WHERE id = ?1 AND (owner IS NULL OR owner = ?2 OR heartbeat IS NULL OR heartbeat <= ?4)",
+                    params![session, owner, until, now],
+                )
+                .map_err(backend)?;
+            if changed == 0 {
+                let holder: Option<String> = transaction
+                    .query_row("SELECT owner FROM sessions WHERE id = ?1", params![session], |row| row.get(0))
+                    .map_err(backend)?;
+                return Err(StoreError::Locked { session: id, owner: holder.unwrap_or_default() });
+            }
+            transaction.commit().map_err(backend)
+        })
+        .await
+    }
+
+    async fn release(&self, id: SessionId, owner: &str) -> Result<(), StoreError> {
+        let (session, owner) = (id.to_string(), owner.to_owned());
+        self.with(move |connection| {
+            connection
+                .execute(
+                    "UPDATE sessions SET owner = NULL, heartbeat = NULL WHERE id = ?1 AND owner = ?2",
+                    params![session, owner],
+                )
+                .map(|_| ())
+                .map_err(backend)
         })
         .await
     }

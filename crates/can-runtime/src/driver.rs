@@ -5,9 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use can_core::{
-    Approver, Assembler, Chunk, Decision, Envelope, Event, FinishReason, Message, Phase,
-    ProgressSink, Request, RunId, RunState, SCHEMA_VERSION, SessionId, ToolCall, ToolCtx,
-    ToolOutput,
+    Approver, Decision, Envelope, Event, FinishReason, Phase, ProgressSink, RunId, RunState,
+    SCHEMA_VERSION, SessionId, ToolCall, ToolCtx, ToolOutput,
 };
 use futures::StreamExt;
 use tokio::sync::mpsc::{self, error::TrySendError};
@@ -20,6 +19,22 @@ use crate::step::{Effect, Input, step};
 
 /// So viele Tools laufen höchstens gleichzeitig.
 const MAX_PARALLEL_TOOLS: usize = 4;
+
+/// Verlängert die Sperre, solange der Lauf lebt. Geht sie verloren, endet nur die Verlängerung;
+/// der nächste Schreibversuch scheitert dann am Konflikt.
+async fn heartbeat(agent: Arc<Inner>, session: SessionId) {
+    loop {
+        agent.clock.sleep(agent.lease / 3).await;
+        if let Err(error) = agent
+            .store
+            .acquire(session, &agent.owner, agent.clock.now(), agent.lease)
+            .await
+        {
+            tracing::warn!(%error, "Sperre der Sitzung nicht verlängert");
+            return;
+        }
+    }
+}
 
 pub(crate) struct Driver {
     pub(crate) agent: Arc<Inner>,
@@ -37,7 +52,24 @@ pub(crate) struct Driver {
 
 impl Driver {
     /// Wiederholt: `step` aufrufen, Events speichern, anwenden und verteilen, Effekte ausführen.
+    /// Führt den Lauf unter der Sperre der Sitzung: nehmen, regelmäßig verlängern, freigeben.
     pub(crate) async fn run(mut self, first: Input) -> Result<Outcome, RunError> {
+        let (agent, session) = (self.agent.clone(), self.session);
+        agent
+            .store
+            .acquire(session, &agent.owner, agent.clock.now(), agent.lease)
+            .await?;
+        let heartbeat = tokio::spawn(heartbeat(agent.clone(), session));
+        let outcome = self.drive(first).await;
+        heartbeat.abort();
+        if let Err(error) = agent.store.release(session, &agent.owner).await {
+            tracing::warn!(%error, "Sperre der Sitzung nicht freigegeben");
+        }
+        outcome
+    }
+
+    /// Wiederholt: `step` aufrufen, Events speichern, anwenden und verteilen, Effekte ausführen.
+    async fn drive(&mut self, first: Input) -> Result<Outcome, RunError> {
         let mut queue = VecDeque::from([first]);
         loop {
             let input = match queue.pop_front() {
@@ -45,7 +77,7 @@ impl Driver {
                 None if matches!(self.state.phase, Phase::Done | Phase::Idle) => break,
                 None => self.wait().await,
             };
-            let step = step(&self.state, input);
+            let step = step(&self.state, self.redact(input));
             self.commit(step.events).await?;
             let (tools, others): (Vec<Effect>, Vec<Effect>) = step
                 .effects
@@ -64,6 +96,45 @@ impl Driver {
         })
     }
 
+    /// Schwärzt, was von Modell und Tools kommt, bevor die Schrittfunktion daraus Events und
+    /// die nächste Anfrage baut.
+    fn redact(&self, input: Input) -> Input {
+        let redactor = &self.agent.redactor;
+        match input {
+            Input::ModelDone {
+                message,
+                usage,
+                stop,
+            } => Input::ModelDone {
+                message: redactor.value(message),
+                usage,
+                stop,
+            },
+            Input::ToolDone {
+                call_id,
+                output,
+                is_error,
+            } => Input::ToolDone {
+                call_id,
+                output: redactor.value(output),
+                is_error,
+            },
+            Input::ToolRejected { call_id, message } => Input::ToolRejected {
+                call_id,
+                message: redactor.text(&message),
+            },
+            Input::ToolFatal { call_id, message } => Input::ToolFatal {
+                call_id,
+                message: redactor.text(&message),
+            },
+            Input::Compacted { up_to_seq, summary } => Input::Compacted {
+                up_to_seq,
+                summary: redactor.value(summary),
+            },
+            other => other,
+        }
+    }
+
     /// Speichert die Events, bevor irgendeine weitere Wirkung nach außen passiert.
     async fn commit(&mut self, events: Vec<Event>) -> Result<(), RunError> {
         if events.is_empty() {
@@ -77,7 +148,7 @@ impl Driver {
                 run_id: self.run_id,
                 ts,
                 schema: SCHEMA_VERSION,
-                event,
+                event: self.agent.redactor.event(event),
             })
             .collect();
         self.agent.store.append(self.session, &envelopes).await?;
@@ -137,34 +208,6 @@ impl Driver {
         }
     }
 
-    async fn call_model(&mut self, request: Request) -> Input {
-        let mut stream = match self.agent.provider.stream(request).await {
-            Ok(stream) => stream,
-            Err(error) => return Input::ModelFailed(error),
-        };
-        let mut assembler = Assembler::default();
-        while let Some(item) = stream.next().await {
-            let chunk = match item {
-                Ok(chunk) => chunk,
-                Err(error) => return Input::ModelFailed(error),
-            };
-            if let Chunk::TextDelta { text } = &chunk {
-                self.send_delta(text);
-            }
-            if let Err(error) = assembler.push(chunk) {
-                return Input::ModelFailed(error);
-            }
-        }
-        match assembler.finish() {
-            Ok((message, usage, stop)) => Input::ModelDone {
-                message,
-                usage,
-                stop,
-            },
-            Err(error) => Input::ModelFailed(error),
-        }
-    }
-
     /// Reihenfolge: Tool nachschlagen, Argumente prüfen, dann die Policy fragen.
     fn check_policy(&self, call: &ToolCall) -> Input {
         let call_id = call.id;
@@ -188,27 +231,6 @@ impl Driver {
             call_id,
             decision,
             by: Approver::Rule,
-        }
-    }
-
-    /// Lässt das Modell den alten Verlauf zusammenfassen; Deltas gehen dabei nicht an den Kanal.
-    async fn summarize(&self, up_to_seq: u64, request: Request) -> Input {
-        let mut stream = match self.agent.provider.stream(request).await {
-            Ok(stream) => stream,
-            Err(error) => return Input::CompactFailed(error.to_string()),
-        };
-        let mut assembler = Assembler::default();
-        while let Some(item) = stream.next().await {
-            if let Err(error) = item.and_then(|chunk| assembler.push(chunk)) {
-                return Input::CompactFailed(error.to_string());
-            }
-        }
-        match assembler.finish() {
-            Ok((message, ..)) => Input::Compacted {
-                up_to_seq,
-                summary: Message::assistant(message.text()),
-            },
-            Err(error) => Input::CompactFailed(error.to_string()),
         }
     }
 
@@ -244,16 +266,37 @@ impl Driver {
             progress: ProgressSink::noop(),
             secrets: self.agent.secrets.clone(),
         };
+        let max_output_bytes = tool.spec().max_output_bytes;
         match exec::run_tool(tool, call, cx, &self.cancel, self.remaining()).await {
-            ToolRun::Done { output, is_error } => Input::ToolDone {
-                call_id,
-                output,
-                is_error,
-            },
+            ToolRun::Done { output, is_error } => {
+                let output = self.shorten(output, max_output_bytes).await;
+                Input::ToolDone {
+                    call_id,
+                    output,
+                    is_error,
+                }
+            }
             ToolRun::Fatal(message) => Input::ToolFatal { call_id, message },
             ToolRun::Cancelled => Input::Cancel,
             ToolRun::Deadline => Input::Tick(self.agent.clock.now()),
         }
+    }
+
+    /// Kürzt eine zu große Ausgabe für das Modell. Die volle Ausgabe geht als Blob in den Store;
+    /// das Ergebnis nennt ihre Inhaltsadresse.
+    async fn shorten(&self, output: ToolOutput, max_bytes: usize) -> ToolOutput {
+        if exec::text_bytes(&output) <= max_bytes {
+            return output;
+        }
+        let full = self.agent.redactor.text(&output.as_text()).into_bytes();
+        let size = full.len();
+        let mut shortened = exec::truncate(output, max_bytes);
+        let note = match self.agent.store.put_blob(full).await {
+            Ok(digest) => format!("\n[Volle Ausgabe: {size} Bytes, im Store als Blob {digest}]"),
+            Err(error) => format!("\n[Volle Ausgabe: {size} Bytes, nicht gespeichert: {error}]"),
+        };
+        shortened.0.push(can_core::OutputBlock::Text(note));
+        shortened
     }
 
     /// Restzeit bis zum Zeitlimit des Laufs.
@@ -265,8 +308,8 @@ impl Driver {
     }
 
     /// Flüchtig: bei vollem Kanal wird der Text gesammelt statt zu blockieren.
-    fn send_delta(&mut self, text: &str) {
-        self.delta.push_str(text);
+    pub(crate) fn send_delta(&mut self, text: &str) {
+        self.delta.push_str(&self.agent.redactor.text(text));
         let envelope = self.delta_envelope();
         match self.events.try_send(envelope) {
             Ok(()) | Err(TrySendError::Closed(_)) => {}

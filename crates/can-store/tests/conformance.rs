@@ -86,8 +86,65 @@ async fn conformance(store: &dyn Store) {
     assert_eq!(store.load(a).await.unwrap().len(), 4);
 }
 
+/// Blobs sind inhaltsadressiert; Sperren schützen eine Sitzung, bis sie ablaufen.
+async fn blobs_and_leases(store: &dyn Store) {
+    let digest = store.put_blob(b"grosse ausgabe".to_vec()).await.unwrap();
+    assert_eq!(digest, Digest::of(b"grosse ausgabe"));
+    assert_eq!(
+        store.put_blob(b"grosse ausgabe".to_vec()).await.unwrap(),
+        digest
+    );
+    assert_eq!(
+        store.get_blob(&digest).await.unwrap(),
+        Some(b"grosse ausgabe".to_vec())
+    );
+    assert_eq!(store.get_blob(&Digest::of(b"fehlt")).await.unwrap(), None);
+
+    let (session, ttl) = (SessionId::new(), std::time::Duration::from_secs(30));
+    store
+        .acquire(session, "worker-a", Timestamp(1_000), ttl)
+        .await
+        .unwrap();
+    store
+        .acquire(session, "worker-a", Timestamp(2_000), ttl)
+        .await
+        .unwrap();
+    let locked = store
+        .acquire(session, "worker-b", Timestamp(31_999), ttl)
+        .await;
+    assert!(matches!(locked, Err(StoreError::Locked { owner, .. }) if owner == "worker-a"));
+    // Nach Ablauf darf ein anderer übernehmen; der alte Besitzer ist dann draußen.
+    store
+        .acquire(session, "worker-b", Timestamp(32_000), ttl)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .acquire(session, "worker-a", Timestamp(32_001), ttl)
+            .await,
+        Err(StoreError::Locked { .. })
+    ));
+    // Freigeben kann nur der Besitzer.
+    store.release(session, "worker-a").await.unwrap();
+    assert!(
+        store
+            .acquire(session, "worker-c", Timestamp(32_002), ttl)
+            .await
+            .is_err()
+    );
+    store.release(session, "worker-b").await.unwrap();
+    store
+        .acquire(session, "worker-c", Timestamp(32_003), ttl)
+        .await
+        .unwrap();
+    // Die Sperre stört das Log nicht.
+    store.append(session, &[requested(0)]).await.unwrap();
+    assert_eq!(store.load(session).await.unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn memory_store_conforms() {
+    blobs_and_leases(&MemoryStore::new()).await;
     conformance(&MemoryStore::new()).await;
 }
 
@@ -110,6 +167,7 @@ mod sqlite {
     #[tokio::test]
     async fn sqlite_store_conforms_in_memory_and_on_disk() {
         conformance(&SqliteStore::in_memory().unwrap()).await;
+        blobs_and_leases(&SqliteStore::in_memory().unwrap()).await;
         let path = temp_db();
         conformance(&SqliteStore::open(&path).unwrap()).await;
         cleanup(&path);
@@ -190,22 +248,6 @@ mod sqlite {
     }
 
     #[tokio::test]
-    async fn blobs_are_content_addressed() {
-        let store = SqliteStore::in_memory().unwrap();
-        let digest = store.put_blob(b"grosse ausgabe".to_vec()).await.unwrap();
-        assert_eq!(digest, Digest::of(b"grosse ausgabe"));
-        assert_eq!(
-            store.put_blob(b"grosse ausgabe".to_vec()).await.unwrap(),
-            digest
-        );
-        assert_eq!(
-            store.get_blob(digest).await.unwrap(),
-            Some(b"grosse ausgabe".to_vec())
-        );
-        assert_eq!(store.get_blob(Digest::of(b"fehlt")).await.unwrap(), None);
-    }
-
-    #[tokio::test]
     async fn newer_schema_versions_are_refused_not_misread() {
         let store = SqliteStore::in_memory().unwrap();
         let session = SessionId::new();
@@ -215,5 +257,87 @@ mod sqlite {
         assert!(
             matches!(store.load(session).await, Err(StoreError::Corrupt(m)) if m.contains("neuer"))
         );
+    }
+}
+
+/// Läuft nur, wenn `CAN_TEST_POSTGRES_URL` auf eine erreichbare Datenbank zeigt.
+#[cfg(feature = "postgres")]
+mod postgres {
+    use super::*;
+    use can_store::PostgresStore;
+    use std::sync::Arc;
+
+    fn url() -> Option<String> {
+        let url = std::env::var("CAN_TEST_POSTGRES_URL")
+            .ok()
+            .filter(|url| !url.is_empty());
+        if url.is_none() {
+            eprintln!("CAN_TEST_POSTGRES_URL ist nicht gesetzt: PostgreSQL-Tests übersprungen");
+        }
+        url
+    }
+
+    #[tokio::test]
+    async fn postgres_store_conforms() {
+        let Some(url) = url() else { return };
+        let store = PostgresStore::connect(&url).await.unwrap();
+        conformance(&store).await;
+        blobs_and_leases(&store).await;
+        // Ein zweiter Prozess migriert nicht erneut und sieht dieselben Daten.
+        let session = SessionId::new();
+        store.append(session, &[requested(0)]).await.unwrap();
+        let other = PostgresStore::connect(&url).await.unwrap();
+        assert_eq!(other.load(session).await.unwrap(), vec![requested(0)]);
+    }
+
+    #[tokio::test]
+    async fn concurrent_writers_never_produce_gaps_or_duplicates() {
+        let Some(url) = url() else { return };
+        let session = SessionId::new();
+        let mut writers = Vec::new();
+        // Acht Verbindungen wollen gleichzeitig dieselben zwanzig Positionen belegen.
+        for _ in 0..8 {
+            let store = Arc::new(PostgresStore::connect(&url).await.unwrap());
+            writers.push(tokio::spawn(async move {
+                let mut won = 0;
+                for seq in 0..20 {
+                    match store.append(session, &[requested(seq)]).await {
+                        Ok(()) => won += 1,
+                        Err(StoreError::Conflict { .. }) => {}
+                        Err(other) => panic!("{other}"),
+                    }
+                }
+                won
+            }));
+        }
+        let mut total = 0;
+        for writer in writers {
+            total += writer.await.unwrap();
+        }
+        let store = PostgresStore::connect(&url).await.unwrap();
+        let seqs: Vec<u64> = store
+            .load(session)
+            .await
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect();
+        assert_eq!(
+            seqs,
+            (0..seqs.len() as u64).collect::<Vec<u64>>(),
+            "lückenlos und ohne Doppelte"
+        );
+        assert_eq!(
+            total,
+            seqs.len(),
+            "jede Position hat genau ein Schreiber gewonnen"
+        );
+        assert!(!seqs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unreachable_database_is_a_backend_error() {
+        let result = PostgresStore::connect("postgres://can@127.0.0.1:1/postgres").await;
+        assert!(matches!(result, Err(StoreError::Backend(_))));
     }
 }

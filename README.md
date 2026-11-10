@@ -9,7 +9,9 @@ durch eine Policy.
 
 ## Stand
 
-Phase 1 bis 5 des Bauplans sind umgesetzt. Phase 6 (WASM-Sandbox) ist offen.
+Phase 1 bis 5 des Bauplans sind umgesetzt, dazu das Fundament für den Betrieb als Dienst und ein
+erster HTTP-Server. Phase 6 (WASM-Sandbox) und der weitere Enterprise-Ausbau sind offen; der Stand
+steht unter „Dienst“ weiter unten.
 
 | Crate | Aufgabe |
 | --- | --- |
@@ -17,9 +19,10 @@ Phase 1 bis 5 des Bauplans sind umgesetzt. Phase 6 (WASM-Sandbox) ist offen.
 | `can-providers` | OpenAI-kompatibler Provider (Feature `openai`), Anthropic (Feature `anthropic`), `Retry`, `Recording`, `FakeProvider` |
 | `can-runtime` | Schrittfunktion `step`, Treiber, `Agent`-Builder, Limits, Abbruch, Kompaktierung, parallele Tools, `SubAgent` |
 | `can-tools` | `read_file`, `write_file`, `shell`, `http_fetch` (Feature `http`), MCP-Client (Feature `mcp`) |
-| `can-store` | `MemoryStore` und `SqliteStore` (Feature `sqlite`) mit Migrationen |
+| `can-store` | `MemoryStore`, `SqliteStore` (Feature `sqlite`) und `PostgresStore` (Feature `postgres`), mit Blobs und Sitzungssperre |
 | `can-macros` | `#[tool]` macht aus einer `async fn` ein Tool samt JSON-Schema |
 | `can-cli` | Binary `can` mit den Befehlen `chat` und `resume` |
+| `can-server` | Binary `can-server`: HTTP-API, Event-Strom, Freigaben, Mandanten und Rollen, Web-Oberfläche |
 
 ## Ausprobieren
 
@@ -57,6 +60,41 @@ Ohne Frage startet `can chat` ein Gespräch, das Zeile für Zeile von der Standa
 Lesen ist erlaubt; vor jedem Schreiben, vor `shell`, vor HTTP-Abrufen und vor MCP-Tools fragt die
 CLI im Terminal nach, solange keine Regel etwas anderes sagt. Mit `--image bild.png` liegt der
 ersten Frage ein Bild bei.
+
+## Dienst
+
+`can-server` stellt die Laufzeit als HTTP-Dienst für mehrere Mandanten bereit. Eine Vorlage für die
+Konfiguration steht in [`can-server.example.toml`](can-server.example.toml).
+
+```bash
+export CAN_DATABASE_URL=postgres://can@localhost:5432/can
+export ACME_ADA_KEY=ein-langer-zufaelliger-schluessel
+cargo run -p can-server -- can-server.toml
+```
+
+Die Oberfläche liegt unter `/`, Kennzahlen im Prometheus-Format unter `/metrics`, der
+Health-Check unter `/healthz`. Alles unter `/v1` verlangt `Authorization: Bearer <schlüssel>`.
+
+| Aufruf | Wirkung |
+| --- | --- |
+| `POST /v1/sessions` | Sitzung anlegen und Lauf starten; mit `Idempotency-Key` startet ein doppelter Aufruf keinen zweiten Lauf |
+| `POST /v1/sessions/{id}/messages` | nächste Nachricht in derselben Sitzung |
+| `GET /v1/sessions/{id}/events` | Event-Strom (SSE); mit `?after=` oder `Last-Event-ID` ab einer Position |
+| `GET /v1/sessions/{id}/log` | gespeicherte Events als JSON |
+| `GET /v1/approvals` | offene Rückfragen des Mandanten |
+| `POST /v1/sessions/{id}/approvals/{call_id}` | Rückfrage mit `allow` oder `deny` beantworten |
+| `POST /v1/sessions/{id}/cancel`, `.../resume` | Lauf abbrechen oder fortsetzen |
+
+- **Mandanten:** Jede Sitzung gehört einem Mandanten; fremde Sitzungen sehen aus wie nicht vorhanden.
+- **Rollen:** `viewer` liest, `operator` startet Läufe und erteilt Freigaben, `admin` darf alles im Mandanten.
+- **Kontingente:** gleichzeitige Läufe und Token-Budget pro Mandant; darüber antwortet der Dienst mit 429.
+- **Mehrere Worker:** Mit PostgreSQL teilen sich Worker Store und Sitzungsverzeichnis. Fällt einer aus,
+  übernimmt ein anderer dessen Läufe, sobald die Sitzungssperre abgelaufen ist (30 Sekunden).
+- **Container:** Das `Dockerfile` baut ein Image mit `can-server` und `can`.
+
+Was dem Dienst noch fehlt: Anmeldung über SSO, eine Sandbox pro Lauf, Secret-Verwaltung über
+Vault oder KMS, TLS zur Datenbank und ein Verbindungspool. Das Token-Budget zählt pro Prozess
+und beginnt nach einem Neustart bei null.
 
 ## Konfigurationsdatei
 
@@ -209,3 +247,5 @@ nach der DNS-Auflösung und nach jeder Weiterleitung.
 
 Das Skript führt `cargo fmt --check`, `cargo clippy -D warnings`, alle Tests und `cargo doc` aus.
 Kein Test ruft eine echte Modell-API auf; Provider, MCP und HTTP laufen gegen lokale Server.
+Die PostgreSQL-Tests laufen nur, wenn `CAN_TEST_POSTGRES_URL` auf eine Datenbank zeigt; in der CI
+ist das der Fall.

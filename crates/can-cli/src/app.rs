@@ -96,6 +96,8 @@ pub async fn build_app(options: &Options) -> Result<App, CliError> {
         .tool(shell)
         .policy(policy)
         .limits(config.limits.limits())
+        // Ein Nutzer, ein Rechner: nach einem Absturz soll `resume` sofort weitermachen können.
+        .owner("can-cli")
         .store_arc(store.clone());
     if !config.http.allowed_hosts.is_empty() {
         builder = builder.tool(HttpFetch::new(config.http.allowed_hosts.clone()));
