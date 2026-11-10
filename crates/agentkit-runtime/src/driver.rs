@@ -155,6 +155,14 @@ impl Driver {
                 message: format!("Unbekanntes Tool: {}", call.name),
             };
         };
+        if let Err(problem) =
+            agentkit_core::schema::validate(&tool.spec().input_schema.0, &call.input)
+        {
+            return Input::ToolRejected {
+                call_id,
+                message: format!("Ungültige Argumente: {problem}"),
+            };
+        }
         let decision = match self.agent.policy.check(call, tool.spec()) {
             Decision::Ask if !self.interactive => Decision::Deny,
             decision => decision,

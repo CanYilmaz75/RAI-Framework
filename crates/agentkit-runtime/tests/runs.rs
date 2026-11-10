@@ -165,6 +165,60 @@ async fn unknown_tool_and_tool_errors_go_back_to_the_model() {
     assert!(results[2].0.contains("abgestürzt") && results[2].1);
 }
 
+/// Ungültige Argumente vom Modell sind ein Tool-Fehler mit Feldpfad, kein Absturz.
+#[tokio::test]
+async fn invalid_arguments_are_reported_to_the_model_and_the_tool_never_runs() {
+    let provider = Arc::new(
+        FakeProvider::new()
+            .tool_call("lies", json!({"text": 42}))
+            .turn(vec![
+                agentkit_core::Chunk::ToolCallStart {
+                    index: 0,
+                    id: agentkit_core::CallId::from_parts(7, 7),
+                    name: "lies".into(),
+                },
+                agentkit_core::Chunk::ToolCallArgs {
+                    index: 0,
+                    delta: "{kaputtes json".into(),
+                },
+                agentkit_core::Chunk::Done {
+                    usage: agentkit_core::Usage::default(),
+                    stop: agentkit_core::StopReason::ToolUse,
+                },
+            ])
+            .text("ok"),
+    );
+    let tool = TestTool::reader("lies");
+    let calls = tool.counter();
+    let agent = Agent::builder()
+        .provider_arc(provider.clone())
+        .model("test")
+        .tool(tool)
+        .build()
+        .unwrap();
+    let outcome = agent.complete(SessionId::new(), "los").await.unwrap();
+    assert_eq!(outcome.reason, FinishReason::Completed);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let requests = provider.requests();
+    let result =
+        |request: &agentkit_core::Request| match &request.messages.last().unwrap().content[0] {
+            ContentBlock::ToolResult {
+                output,
+                is_error: true,
+                ..
+            } => output.as_text(),
+            other => panic!("{other:?}"),
+        };
+    assert_eq!(
+        result(&requests[1]),
+        "Ungültige Argumente: text: erwartet string, bekommen number"
+    );
+    assert_eq!(
+        result(&requests[2]),
+        "Ungültige Argumente: Argumente: erwartet object, bekommen string"
+    );
+}
+
 #[tokio::test]
 async fn fatal_tool_error_and_model_failure_end_the_run() {
     let provider = FakeProvider::new().tool_call("fatal", json!({}));
