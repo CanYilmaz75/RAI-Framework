@@ -12,6 +12,10 @@ publish.workspace = true
 default = []
 openai = ["dep:reqwest"]
 anthropic = ["dep:reqwest"]
+gemini = ["dep:reqwest"]
+vertex = ["gemini", "anthropic"]
+bedrock = ["dep:reqwest"]
+all = ["openai", "anthropic", "gemini", "vertex", "bedrock"]
 
 [dependencies]
 can-core.workspace = true

@@ -14,6 +14,7 @@ struct PartialCall {
     id: CallId,
     name: String,
     args: String,
+    signature: Option<String>,
 }
 
 /// Sammelt Chunks und liefert am Ende Nachricht, Verbrauch und Stop-Grund.
@@ -41,6 +42,7 @@ impl Assembler {
                             id,
                             name,
                             args: String::new(),
+                            signature: None,
                         },
                     )
                     .is_some()
@@ -50,6 +52,14 @@ impl Assembler {
                     )));
                 }
             }
+            Chunk::ToolCallSignature { index, signature } => match self.calls.get_mut(&index) {
+                Some(call) => call.signature = Some(signature),
+                None => {
+                    return Err(ProviderError::Protocol(format!(
+                        "Signatur für unbekannten Tool-Aufruf {index}"
+                    )));
+                }
+            },
             Chunk::ToolCallArgs { index, delta } => match self.calls.get_mut(&index) {
                 Some(call) => call.args.push_str(&delta),
                 None => {
@@ -78,6 +88,14 @@ impl Assembler {
             content.push(ContentBlock::Text(self.text));
         }
         for call in self.calls.into_values() {
+            // Die Signatur steht als Denkblock direkt vor ihrem Aufruf; so findet der Provider
+            // sie bei der nächsten Anfrage wieder.
+            if let Some(signature) = call.signature {
+                content.push(ContentBlock::Reasoning {
+                    text: String::new(),
+                    signature: Some(signature),
+                });
+            }
             let input = if call.args.trim().is_empty() {
                 Value::Object(Map::new())
             } else {
@@ -122,6 +140,44 @@ mod tests {
             assembler.push(chunk)?;
         }
         assembler.finish()
+    }
+
+    #[test]
+    fn signatures_stay_next_to_their_call() {
+        let id = CallId::from_parts(1, 1);
+        let (message, ..) = run(vec![
+            Chunk::ToolCallStart {
+                index: 0,
+                id,
+                name: "t".into(),
+            },
+            Chunk::ToolCallSignature {
+                index: 0,
+                signature: "sig-1".into(),
+            },
+            Chunk::ToolCallArgs {
+                index: 0,
+                delta: "{}".into(),
+            },
+            done(),
+        ])
+        .unwrap();
+        assert_eq!(
+            message.content[0],
+            ContentBlock::Reasoning {
+                text: String::new(),
+                signature: Some("sig-1".into())
+            }
+        );
+        assert!(matches!(message.content[1], ContentBlock::ToolUse { .. }));
+        let unknown = vec![
+            Chunk::ToolCallSignature {
+                index: 4,
+                signature: "x".into(),
+            },
+            done(),
+        ];
+        assert!(matches!(run(unknown), Err(ProviderError::Protocol(_))));
     }
 
     #[test]

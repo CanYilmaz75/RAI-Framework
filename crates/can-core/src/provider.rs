@@ -58,6 +58,12 @@ pub enum Chunk {
         index: u32,
         delta: String,
     },
+    /// Signatur des Anbieters zu einem Tool-Aufruf, die bei der nächsten Anfrage unverändert
+    /// zurückgehen muss (etwa `thoughtSignature` bei Gemini).
+    ToolCallSignature {
+        index: u32,
+        signature: String,
+    },
     Done {
         usage: Usage,
         stop: StopReason,

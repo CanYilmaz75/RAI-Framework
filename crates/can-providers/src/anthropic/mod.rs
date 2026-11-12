@@ -1,7 +1,7 @@
 //! Anthropic Messages API mit SSE-Streaming.
 
-mod decode;
-mod wire;
+pub(crate) mod decode;
+pub(crate) mod wire;
 
 use async_trait::async_trait;
 use can_core::{Capabilities, Provider, ProviderError, ProviderStream, Request, Secret};

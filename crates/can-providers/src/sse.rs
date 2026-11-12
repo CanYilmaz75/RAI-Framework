@@ -88,11 +88,17 @@ impl SseParser {
     }
 }
 
-#[cfg_attr(not(any(feature = "openai", feature = "anthropic")), allow(dead_code))]
+#[cfg_attr(
+    not(any(feature = "openai", feature = "anthropic", feature = "gemini")),
+    allow(dead_code)
+)]
 /// Ein Element des normalisierten Chunk-Stroms.
 pub(crate) type Item = Result<Chunk, ProviderError>;
 
-#[cfg_attr(not(any(feature = "openai", feature = "anthropic")), allow(dead_code))]
+#[cfg_attr(
+    not(any(feature = "openai", feature = "anthropic", feature = "gemini")),
+    allow(dead_code)
+)]
 /// Übersetzt die SSE-Events eines Anbieters in normalisierte Chunks.
 pub(crate) trait SseDecoder: Send + 'static {
     /// Verarbeitet ein Event und hängt die daraus entstehenden Chunks an.
@@ -103,7 +109,10 @@ pub(crate) trait SseDecoder: Send + 'static {
     fn is_finished(&self) -> bool;
 }
 
-#[cfg_attr(not(any(feature = "openai", feature = "anthropic")), allow(dead_code))]
+#[cfg_attr(
+    not(any(feature = "openai", feature = "anthropic", feature = "gemini")),
+    allow(dead_code)
+)]
 struct State<S, D> {
     body: S,
     parser: SseParser,
@@ -112,7 +121,10 @@ struct State<S, D> {
     failed: bool,
 }
 
-#[cfg_attr(not(any(feature = "openai", feature = "anthropic")), allow(dead_code))]
+#[cfg_attr(
+    not(any(feature = "openai", feature = "anthropic", feature = "gemini")),
+    allow(dead_code)
+)]
 /// Macht aus einem Strom von Byte-Blöcken den normalisierten Chunk-Strom.
 pub(crate) fn sse_stream<S, D>(body: S, decoder: D) -> ProviderStream
 where
