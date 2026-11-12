@@ -29,6 +29,7 @@ tools = ["read_file", "http_fetch"]
 workdir = "."
 http_allowed_hosts = ["example.com"]
 max_steps = 50
+# pricing = { input_per_million = 3.0, output_per_million = 15.0 }
 # isolate_workdir = true          # Vorgabe: eigenes Unterverzeichnis pro Sitzung
 # confidential_tools = ["read_file"]
 # exfiltration_guard = "deny"     # externe Tools sperren, sobald vertrauliche Daten im Verlauf stehen
@@ -54,6 +55,8 @@ decision = "allow"
 name = "acme"
 max_concurrent_runs = 8
 max_tokens = 0                     # 0 = unbegrenzt
+# max_cost_cents = 5000            # Kostenbudget; braucht pricing am Agenten
+# webhook_url = "https://example.com/can-ende"
 
 [[tenants.keys]]
 key_env = "ACME_ADA_KEY"           # mindestens 16 Zeichen

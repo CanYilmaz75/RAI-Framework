@@ -2,6 +2,15 @@
 
 ## Unveröffentlicht
 
+### Weiterer Ausbau
+
+- `Fallback`-Provider, Azure OpenAI, `Pricing`
+- `Agent::complete_structured`: Endantwort als JSON nach Schema
+- Sitzungen löschen: `Store::delete`, `DELETE /v1/sessions/{id}`
+- Dienst: Kosten je Lauf, Kostenbudget, Webhook am Laufende, `/openapi.json`
+- CLI: `can inspect`, `can eval` mit `--replay`
+- Fassaden-Crate `can`
+
 ### Isolation und Sicherheit
 
 - Sandbox für `shell` über Namespaces oder Container; Arbeitsverzeichnis pro Sitzung
