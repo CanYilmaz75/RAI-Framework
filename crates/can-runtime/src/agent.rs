@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use can_core::{
-    ByEffect, Clock, Limits, MemoryStore, Message, Phase, Policy, Provider, RunConfig, RunId,
-    RunState, SecretsHandle, SessionId, Store, Tool,
+    ByEffect, Clock, Decision, Limits, MemoryStore, Message, Moderator, Phase, Policy, Provider,
+    RunConfig, RunId, RunState, SecretsHandle, SessionId, Store, Tool,
 };
 use serde_json::{Map, Value};
 use tokio::sync::mpsc;
@@ -38,6 +38,9 @@ pub(crate) struct Inner {
     pub(crate) owner: String,
     /// Laufzeit der Sperre; sie wird alle `lease / 3` verlängert.
     pub(crate) lease: Duration,
+    /// Jede Sitzung bekommt ein eigenes Unterverzeichnis des Arbeitsverzeichnisses.
+    pub(crate) isolate_workdir: bool,
+    pub(crate) moderator: Option<Arc<dyn Moderator>>,
 }
 
 /// Ein fertig konfigurierter Agent. Billig zu klonen.
@@ -98,6 +101,11 @@ impl Agent {
         input: Option<Message>,
         interactive: bool,
     ) -> Result<Run, RunError> {
+        if let (Some(moderator), Some(message)) = (&self.inner.moderator, &input) {
+            moderator
+                .check(&message.text())
+                .map_err(RunError::Blocked)?;
+        }
         let log = self.inner.store.load(session).await?;
         let state = RunState::fold(self.inner.config.clone(), &log);
         let running = !matches!(state.phase, Phase::Idle | Phase::Done);
@@ -165,6 +173,9 @@ pub struct AgentBuilder {
     secrets: SecretsHandle,
     owner: Option<String>,
     lease: Option<Duration>,
+    isolate_workdir: bool,
+    moderator: Option<Arc<dyn Moderator>>,
+    exfiltration_guard: Option<Decision>,
 }
 
 impl AgentBuilder {
@@ -272,6 +283,26 @@ impl AgentBuilder {
         self
     }
 
+    /// Jede Sitzung arbeitet in einem eigenen Unterverzeichnis, benannt nach ihrer Kennung.
+    /// So sehen sich Sitzungen und Mandanten nicht gegenseitig in die Dateien.
+    pub fn isolate_workdir(mut self, isolate: bool) -> Self {
+        self.isolate_workdir = isolate;
+        self
+    }
+
+    /// Inhaltsfilter für Eingaben der Nutzer und Antworten des Modells.
+    pub fn moderator(mut self, moderator: impl Moderator + 'static) -> Self {
+        self.moderator = Some(Arc::new(moderator));
+        self
+    }
+
+    /// Schutz vor Datenabfluss: Sobald ein als vertraulich markiertes Tool Daten geliefert hat,
+    /// gilt für jedes externe Tool mindestens diese Entscheidung (`Ask` oder `Deny`).
+    pub fn exfiltration_guard(mut self, decision: Decision) -> Self {
+        self.exfiltration_guard = Some(decision);
+        self
+    }
+
     /// Prüft Tool-Namen, Modellfähigkeiten, Limits und Arbeitsverzeichnis.
     pub fn build(self) -> Result<Agent, BuildError> {
         let mut problems = Vec::new();
@@ -319,6 +350,7 @@ impl AgentBuilder {
             extra: self.extra,
             context_window: capabilities.context_window,
             reserve_output: self.max_output.unwrap_or(capabilities.max_output),
+            exfiltration_guard: self.exfiltration_guard,
         };
         Ok(Agent {
             inner: Arc::new(Inner {
@@ -332,6 +364,8 @@ impl AgentBuilder {
                 redactor: Redactor::new(&self.secrets),
                 owner: self.owner.unwrap_or_else(|| SessionId::new().to_string()),
                 lease: self.lease.unwrap_or(Duration::from_secs(30)),
+                isolate_workdir: self.isolate_workdir,
+                moderator: self.moderator,
                 secrets: self.secrets,
             }),
         })

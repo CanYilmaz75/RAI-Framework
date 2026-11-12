@@ -35,6 +35,9 @@ pub struct ToolSpec {
     pub idempotent: bool,
     pub timeout: Duration,
     pub max_output_bytes: usize,
+    /// Liefert das Tool vertrauliche Daten? Dann greift danach der Schutz vor Datenabfluss.
+    #[serde(default)]
+    pub confidential: bool,
 }
 
 impl ToolSpec {
@@ -52,6 +55,7 @@ impl ToolSpec {
             idempotent: false,
             timeout: Duration::from_secs(60),
             max_output_bytes: 64 * 1024,
+            confidential: false,
         }
     }
 
@@ -70,6 +74,12 @@ impl ToolSpec {
     /// Setzt das Zeitlimit pro Aufruf.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Markiert die Ausgaben des Tools als vertraulich.
+    pub fn with_confidential(mut self, confidential: bool) -> Self {
+        self.confidential = confidential;
         self
     }
 
