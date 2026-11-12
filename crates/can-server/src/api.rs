@@ -219,9 +219,20 @@ pub async fn get_session(
         .into_iter()
         .filter(|approval| approval.session_id == id)
         .collect();
-    Ok(Json(
-        json!({"session": meta, "running_here": app.runs.live(id).is_some(), "pending_approvals": approvals}),
-    ))
+    // Der Plan des Agenten ergibt sich aus dem Log.
+    let plan = match app.runs.agents.get(&meta.agent) {
+        Some(agent) => {
+            let log = app.runs.store.load(id).await.map_err(internal)?;
+            can_core::RunState::fold(agent.config().clone(), &log).plan
+        }
+        None => Vec::new(),
+    };
+    Ok(Json(json!({
+        "session": meta,
+        "running_here": app.runs.live(id).is_some(),
+        "pending_approvals": approvals,
+        "plan": plan,
+    })))
 }
 
 pub async fn cancel(
@@ -265,6 +276,8 @@ pub async fn list_approvals(State(app): State<Arc<App>>, principal: Principal) -
 #[serde(deny_unknown_fields)]
 pub struct Resolve {
     decision: Decision,
+    /// Nur mit `allow`: Argumente, mit denen das Tool statt denen des Modells läuft.
+    input: Option<Value>,
 }
 
 pub async fn resolve_approval(
@@ -274,12 +287,31 @@ pub async fn resolve_approval(
     Json(body): Json<Resolve>,
 ) -> Result<StatusCode, ApiError> {
     require(&principal, Role::Operator)?;
-    session_of(&app, &principal, id).await?;
+    let meta = session_of(&app, &principal, id).await?;
     if body.decision == Decision::Ask {
         return Err(error(
             StatusCode::BAD_REQUEST,
             "Erlaubt sind allow und deny.",
         ));
+    }
+    if let Some(input) = body.input {
+        if body.decision != Decision::Allow {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "Geänderte Argumente gibt es nur mit allow.",
+            ));
+        }
+        return match app.runs.approve_with(&meta.agent, id, call_id, input).await {
+            Ok(true) => Ok(StatusCode::NO_CONTENT),
+            Ok(false) => Err(error(
+                StatusCode::NOT_FOUND,
+                "Diese Rückfrage ist nicht (mehr) offen.",
+            )),
+            Err(problem) => Err(error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("Argumente passen nicht: {problem}"),
+            )),
+        };
     }
     if app.runs.resolve(id, call_id, body.decision).await {
         return Ok(StatusCode::NO_CONTENT);

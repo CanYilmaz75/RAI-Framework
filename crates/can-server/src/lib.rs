@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod branch;
 mod build;
 pub mod config;
 pub mod meta;
@@ -62,6 +63,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/sessions/{id}/verify", get(api::verify))
         .route("/v1/sessions/{id}/cancel", post(api::cancel))
         .route("/v1/sessions/{id}/resume", post(api::resume))
+        .route("/v1/sessions/{id}/fork", post(branch::fork))
         .route(
             "/v1/sessions/{id}/approvals/{call_id}",
             post(api::resolve_approval),

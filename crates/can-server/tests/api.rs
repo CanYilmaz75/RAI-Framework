@@ -183,6 +183,7 @@ async fn openapi_document_is_served_and_covers_the_routes() {
         "/v1/sessions/{id}/verify",
         "/v1/sessions/{id}/cancel",
         "/v1/sessions/{id}/resume",
+        "/v1/sessions/{id}/fork",
         "/v1/sessions/{id}/approvals/{call_id}",
         "/v1/approvals",
         "/healthz",

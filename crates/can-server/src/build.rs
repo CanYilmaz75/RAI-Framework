@@ -10,7 +10,10 @@ use can_core::{
 use can_providers::{Anthropic, OpenAiCompat, Retry};
 use can_runtime::{Agent, SystemClock};
 use can_tools::mcp::HttpTransport;
-use can_tools::{HttpFetch, McpClient, ReadFile, SandboxedShell, shell, write_file};
+use can_tools::{
+    HttpFetch, LoadSkill, McpClient, ReadFile, SandboxedShell, SkillSet, WriteTodos, edit_file,
+    glob, grep, load_memory, ls, shell, system_prompt, write_file,
+};
 
 use crate::config::{AgentConfig, ConfigError, invalid};
 
@@ -83,8 +86,18 @@ impl AgentConfig {
             .limits(limits)
             .store_arc(store)
             .owner(worker);
-        if let Some(system) = &self.system {
-            builder = builder.system(system);
+        let failed = |error: std::io::Error| invalid(format!("Agent {}: {error}", self.name));
+        let memory = match &self.memory_file {
+            Some(path) => load_memory(path).map_err(failed)?,
+            None => None,
+        };
+        let skills = match &self.skills_dir {
+            Some(dir) => SkillSet::load(dir).map_err(failed)?,
+            None => SkillSet::default(),
+        };
+        if self.system.is_some() || memory.is_some() || !skills.is_empty() {
+            let base = self.system.as_deref().unwrap_or("");
+            builder = builder.system(system_prompt(base, memory.as_deref(), &skills));
         }
         if let Some(workdir) = &self.workdir {
             builder = builder.workdir(workdir);
@@ -103,10 +116,18 @@ impl AgentConfig {
             tools.push(match (tool.as_str(), &self.sandbox) {
                 ("read_file", _) => Arc::new(ReadFile::new()),
                 ("write_file", _) => Arc::new(write_file),
+                ("edit_file", _) => Arc::new(edit_file),
+                ("ls", _) => Arc::new(ls),
+                ("glob", _) => Arc::new(glob),
+                ("grep", _) => Arc::new(grep),
+                ("write_todos", _) => Arc::new(WriteTodos::new()),
                 ("shell", Some(sandbox)) => Arc::new(SandboxedShell::new(sandbox.clone())),
                 ("shell", None) => Arc::new(shell),
                 _ => Arc::new(HttpFetch::new(self.http_allowed_hosts.clone())),
             });
+        }
+        if !skills.is_empty() {
+            tools.push(Arc::new(LoadSkill::new(skills)));
         }
         for (name, server) in &self.mcp {
             let client = match (&server.command, &server.url) {

@@ -73,7 +73,8 @@ pub struct AgentConfig {
     pub provider: String,
     pub base_url: Option<String>,
     pub api_key_env: Option<String>,
-    /// Aus `read_file`, `write_file`, `shell`, `http_fetch`.
+    /// Aus `read_file`, `write_file`, `edit_file`, `ls`, `glob`, `grep`, `write_todos`, `shell`,
+    /// `http_fetch`.
     #[serde(default)]
     pub tools: Vec<String>,
     pub workdir: Option<PathBuf>,
@@ -85,6 +86,10 @@ pub struct AgentConfig {
     pub max_steps: Option<u32>,
     pub max_tokens: Option<u64>,
     pub timeout_secs: Option<u64>,
+    /// Datei, deren Inhalt als Gedächtnis immer im System-Prompt steht.
+    pub memory_file: Option<PathBuf>,
+    /// Ordner mit Skills (`<name>/SKILL.md`); das Modell lädt sie bei Bedarf.
+    pub skills_dir: Option<PathBuf>,
     /// Preise des Modells je Million Token, für Kosten und Kostenbudget.
     pub pricing: Option<Pricing>,
     /// Sandbox für `shell`. Ohne Angabe läuft `shell` ungeschützt.
@@ -160,7 +165,15 @@ impl ServerConfig {
             for tool in &agent.tools {
                 if !matches!(
                     tool.as_str(),
-                    "read_file" | "write_file" | "shell" | "http_fetch"
+                    "read_file"
+                        | "write_file"
+                        | "edit_file"
+                        | "ls"
+                        | "glob"
+                        | "grep"
+                        | "write_todos"
+                        | "shell"
+                        | "http_fetch"
                 ) {
                     return Err(invalid(format!(
                         "Agent {}: unbekanntes Tool {tool}",

@@ -168,6 +168,39 @@ impl RunManager {
         false
     }
 
+    /// Gibt eine offene Rückfrage mit geänderten Argumenten frei. `Err` nennt, warum die
+    /// Argumente nicht zum Tool passen; `Ok(false)` heißt, die Rückfrage ist nicht (mehr) offen.
+    pub async fn approve_with(
+        &self,
+        agent: &str,
+        session: SessionId,
+        call_id: CallId,
+        input: serde_json::Value,
+    ) -> Result<bool, String> {
+        let Some(live) = self.live(session) else {
+            return Ok(false);
+        };
+        let tool = live
+            .approvals
+            .lock()
+            .ok()
+            .and_then(|approvals| approvals.get(&call_id).map(|call| call.name.clone()));
+        let Some(tool) = tool else {
+            return Ok(false);
+        };
+        let spec = self
+            .agents
+            .get(agent)
+            .and_then(|agent| agent.config().tool(&tool).cloned());
+        let spec = spec.ok_or_else(|| format!("Unbekanntes Tool: {tool}"))?;
+        can_core::schema::validate(&spec.input_schema.0, &input)?;
+        if live.controller.approve_with(call_id, input).await.is_ok() {
+            self.metrics.approval_resolved();
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     /// Bricht den Lauf der Sitzung ab. `false`, wenn hier keiner unterwegs ist.
     pub fn cancel(&self, session: SessionId) -> bool {
         self.live(session)
