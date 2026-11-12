@@ -29,6 +29,9 @@ pub struct Config {
     pub http: HttpConfig,
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Tools als WebAssembly-Module, jedes mit eigenen Freigaben.
+    #[serde(default)]
+    pub wasm_tools: Vec<can_tools::WasmToolConfig>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

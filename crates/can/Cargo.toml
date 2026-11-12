@@ -20,6 +20,7 @@ sqlite = ["can-store/sqlite"]
 postgres = ["can-store/postgres"]
 http = ["can-tools/http"]
 mcp = ["can-tools/mcp"]
+wasm = ["can-tools/wasm"]
 
 [dependencies]
 can-core.workspace = true

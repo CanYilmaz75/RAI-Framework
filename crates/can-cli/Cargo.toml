@@ -11,7 +11,7 @@ publish.workspace = true
 [dependencies]
 can-core.workspace = true
 can-providers = { workspace = true, features = ["all"] }
-can-tools = { workspace = true, features = ["http", "mcp"] }
+can-tools = { workspace = true, features = ["http", "mcp", "wasm"] }
 can-store = { workspace = true, features = ["sqlite"] }
 can-runtime.workspace = true
 clap.workspace = true

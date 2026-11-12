@@ -35,6 +35,18 @@ decision = "deny"
 [http]
 allowed_hosts = ["example.com", "*.example.org"]
 
+# Tools als WebAssembly-Module (WASI Preview 1) mit eigenen Freigaben.
+# [[wasm_tools]]
+# name = "demo"
+# description = "Beispiel-Tool"
+# module = "wasm/demo-tool/target/wasm32-wasip1/release/can-demo-tool.wasm"
+# effect = "read_only"
+# files = "read"                 # none, read oder read_write; sichtbar als /work
+# network_hosts = ["example.com"]
+# secrets = ["API_KEY"]
+# memory_mb = 64
+# fuel_millions = 1000
+
 # MCP-Server: entweder command (stdio) oder url (HTTP). Ihre Tools heißen <name>__<tool>.
 # [mcp.servers.dateien]
 # command = "mein-mcp-server"

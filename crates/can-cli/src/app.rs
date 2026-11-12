@@ -8,8 +8,8 @@ use can_providers::{FakeProvider, Recording, Retry};
 use can_runtime::{Agent, SystemClock};
 use can_store::SqliteStore;
 use can_tools::{
-    HttpFetch, LoadSkill, McpClient, ReadFile, SkillSet, WriteTodos, edit_file, glob, grep,
-    load_memory, ls, shell, system_prompt, write_file,
+    HttpFetch, LoadSkill, McpClient, ReadFile, SkillSet, WasmTool, WriteTodos, edit_file, glob,
+    grep, load_memory, ls, shell, system_prompt, write_file,
 };
 
 use crate::CliError;
@@ -130,6 +130,11 @@ pub async fn build_app(options: &Options) -> Result<App, CliError> {
         .store_arc(store.clone());
     if !skills.is_empty() {
         builder = builder.tool(LoadSkill::new(skills));
+    }
+    for wasm in &config.wasm_tools {
+        let tool = WasmTool::load(wasm.clone())
+            .map_err(|error| CliError::Config(format!("WASM-Tool {}: {error}", wasm.name)))?;
+        builder = builder.tool(tool);
     }
     if !config.http.allowed_hosts.is_empty() {
         builder = builder.tool(HttpFetch::new(config.http.allowed_hosts.clone()));

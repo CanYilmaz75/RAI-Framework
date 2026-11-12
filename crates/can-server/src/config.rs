@@ -120,6 +120,9 @@ pub struct AgentConfig {
     /// MCP-Server dieses Agenten.
     #[serde(default)]
     pub mcp: BTreeMap<String, McpServerConfig>,
+    /// Tools als WebAssembly-Module, jedes mit eigenen Freigaben.
+    #[serde(default)]
+    pub wasm_tools: Vec<can_tools::WasmToolConfig>,
 }
 
 fn yes() -> bool {
@@ -242,6 +245,12 @@ impl ServerConfig {
         }
         for agent in &self.agents {
             names.extend(agent.provider_settings().secret_names());
+            names.extend(
+                agent
+                    .wasm_tools
+                    .iter()
+                    .flat_map(|tool| tool.secrets.iter().cloned()),
+            );
             names.extend(
                 agent
                     .mcp

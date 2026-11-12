@@ -279,3 +279,55 @@ async fn a_forked_session_continues_independently() {
     assert_eq!(app.store.load(source).await.unwrap().len(), 8);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Ein WASM-Tool aus `can.toml` läuft in der Sandbox und sieht nur das freigegebene Verzeichnis.
+#[tokio::test(flavor = "multi_thread")]
+async fn wasm_tool_from_the_config_runs_in_the_sandbox() {
+    let dir = workdir();
+    std::fs::write(dir.join("notiz.txt"), "Geheimzahl 4711").unwrap();
+    let module = r#"(module
+      (import "wasi_snapshot_preview1" "fd_write" (func $w (param i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 16) "aus der Sandbox")
+      (func (export "_start")
+        (i32.store (i32.const 0) (i32.const 16)) (i32.store (i32.const 4) (i32.const 15))
+        (drop (call $w (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))"#;
+    std::fs::write(dir.join("tool.wat"), module).unwrap();
+    let config = format!(
+        "[[wasm_tools]]\nname = \"sandbox\"\ndescription = \"Beispiel\"\nmodule = \"{}\"\neffect = \"read_only\"\n",
+        dir.join("tool.wat").display()
+    );
+    let (base_url, requests) =
+        mock_api(vec![tool_call("sandbox", json!({})), text("Fertig.")]).await;
+    let sandboxed = Options {
+        config: can_cli::Config::parse(&config).unwrap(),
+        ..options(&dir, base_url)
+    };
+    let app = build_app(&sandboxed).await.unwrap();
+    let mut approve = |call: &can_core::ToolCall| panic!("lesend, keine Rückfrage: {}", call.name);
+    chat_turn(
+        &app,
+        SessionId::new(),
+        "Lauf",
+        Terminal {
+            out: &mut Vec::new(),
+            approve: &mut approve,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        tool_message(&requests.lock().unwrap()[1]),
+        "aus der Sandbox"
+    );
+
+    let broken =
+        "[[wasm_tools]]\nname = \"x\"\ndescription = \"d\"\nmodule = \"/gibt/es/nicht.wasm\"\n";
+    let failing = Options {
+        config: can_cli::Config::parse(broken).unwrap(),
+        ..options(&dir, "http://127.0.0.1:1/v1".into())
+    };
+    let error = build_app(&failing).await.err().unwrap();
+    assert!(error.to_string().contains("WASM-Tool x"), "{error}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

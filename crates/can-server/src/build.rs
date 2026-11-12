@@ -11,8 +11,8 @@ use can_providers::{ProviderSettings, Retry};
 use can_runtime::{Agent, SystemClock};
 use can_tools::mcp::HttpTransport;
 use can_tools::{
-    HttpFetch, LoadSkill, McpClient, ReadFile, SandboxedShell, SkillSet, WriteTodos, edit_file,
-    glob, grep, load_memory, ls, shell, system_prompt, write_file,
+    HttpFetch, LoadSkill, McpClient, ReadFile, SandboxedShell, SkillSet, WasmTool, WriteTodos,
+    edit_file, glob, grep, load_memory, ls, shell, system_prompt, write_file,
 };
 
 use crate::config::{AgentConfig, ConfigError, invalid};
@@ -157,6 +157,15 @@ impl AgentConfig {
                     .await
                     .map_err(|error| invalid(format!("MCP-Server {name}: {error}")))?,
             );
+        }
+        for wasm in &self.wasm_tools {
+            let tool = WasmTool::load(wasm.clone()).map_err(|error| {
+                invalid(format!(
+                    "Agent {}, WASM-Tool {}: {error}",
+                    self.name, wasm.name
+                ))
+            })?;
+            tools.push(Arc::new(tool));
         }
         for tool in tools {
             let spec = tool.spec().clone();

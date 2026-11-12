@@ -2,6 +2,16 @@
 
 ## Unveröffentlicht
 
+### Phase 6: WASM-Sandbox, alle Anbieter, Lizenz
+
+- Tools als WebAssembly-Module (WASI Preview 1) mit Freigaben für Dateien, Netzwerk-Hosts und
+  Secrets, Speichergrenze und Rechenbudget; Beispiel-Tool unter `wasm/demo-tool`
+- Anbieter: Gemini (API und Vertex AI), Claude auf Vertex AI, Amazon Bedrock, Voreinstellungen für
+  Ollama, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks und Perplexity;
+  `ProviderSettings` für CLI und Dienst
+- MIT-Lizenz
+- Neue Abhängigkeiten: `wasmtime`, `wasmtime-wasi`
+
 ### Arbeit an Code
 
 - Tools `ls`, `glob`, `grep`, `edit_file`

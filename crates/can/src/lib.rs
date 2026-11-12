@@ -3,7 +3,7 @@
 //!
 //! Ohne Feature-Flags baut nur der Kern mit `MemoryStore` und `FakeProvider`. Die Flags
 //! `openai`, `anthropic`, `gemini`, `vertex`, `bedrock` (oder alle mit `providers`), `sqlite`,
-//! `postgres`, `http` und `mcp` schalten Anbieter, Stores und Tools dazu.
+//! `postgres`, `http`, `mcp` und `wasm` schalten Anbieter, Stores und Tools dazu.
 //!
 //! ```
 //! use can::prelude::*;
@@ -66,4 +66,6 @@ pub mod prelude {
     pub use can_tools::HttpFetch;
     #[cfg(feature = "mcp")]
     pub use can_tools::McpClient;
+    #[cfg(feature = "wasm")]
+    pub use can_tools::{FileAccess, WasmTool, WasmToolConfig};
 }

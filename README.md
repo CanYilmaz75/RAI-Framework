@@ -10,7 +10,7 @@ durch eine Policy.
 
 ## Stand
 
-Phase 1 bis 5 des Bauplans sind umgesetzt, dazu das Fundament für den Betrieb als Dienst und ein
+Phase 1 bis 6 des Bauplans sind umgesetzt, dazu das Fundament für den Betrieb als Dienst und ein
 erster HTTP-Server. Phase 6 (WASM-Sandbox) und der weitere Enterprise-Ausbau sind offen; der Stand
 steht unter „Dienst“ weiter unten.
 
@@ -303,6 +303,42 @@ Die CLI bringt dafür diese Tools mit; im Dienst wählt man sie pro Agent in der
   festgehalten, und das Modell erfährt, dass sie geändert wurden.
 - **Verzweigen:** `can fork <kennung> --at <position>` legt eine neue Sitzung an, die den Verlauf
   bis zu dieser Position übernimmt. Die Positionen zeigt `can inspect`.
+
+## WASM-Tools
+
+Ein Tool kann ein WebAssembly-Modul sein (WASI Preview 1). Es bekommt die Argumente als JSON auf der
+Standardeingabe und schreibt sein Ergebnis auf die Standardausgabe. Es sieht nur, was freigegeben
+ist:
+
+| Freigabe | Wirkung |
+| --- | --- |
+| `files` | `none` (Vorgabe), `read` oder `read_write`; das Arbeitsverzeichnis erscheint als `/work` |
+| `network_hosts` | Hosts für die Host-Funktion `can.http_get`; ohne Eintrag kein Netzwerk. Private Adressen bleiben gesperrt. |
+| `secrets` | Schlüssel, die das Modul als Umgebungsvariablen sieht; sonst sieht es keine Umgebung |
+| `memory_mb`, `fuel_millions` | Speichergrenze und Rechenbudget |
+
+```toml
+[[wasm_tools]]
+name = "demo"
+description = "Beispiel-Tool"
+module = "wasm/demo-tool/target/wasm32-wasip1/release/can-demo-tool.wasm"
+effect = "read_only"
+files = "read"
+```
+
+Ein Beispiel samt Anleitung liegt unter [`wasm/demo-tool`](wasm/demo-tool):
+
+```bash
+rustup target add wasm32-wasip1
+```
+
+```bash
+cargo build --release --target wasm32-wasip1 --manifest-path wasm/demo-tool/Cargo.toml
+```
+
+WASI Preview 1 kennt keine Netzwerkverbindungen; Abrufe gehen nur über `can.http_get`, und die
+prüft jede Adresse samt Weiterleitungen. Ein abgebrochener Lauf wartet nicht auf das Modul; das
+Modul selbst endet spätestens, wenn sein Rechenbudget verbraucht ist.
 
 ## Werkzeuge für den Betrieb
 
