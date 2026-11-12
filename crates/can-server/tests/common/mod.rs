@@ -57,6 +57,15 @@ pub async fn serve_with(
     store: Arc<MemoryStore>,
     sessions: Arc<MemoryDirectory>,
 ) -> Server {
+    serve_scheduled(provider, store, sessions, Vec::new()).await
+}
+
+pub async fn serve_scheduled(
+    provider: FakeProvider,
+    store: Arc<MemoryStore>,
+    sessions: Arc<MemoryDirectory>,
+    schedules: Vec<can_server::schedule::ScheduleConfig>,
+) -> Server {
     let agents = HashMap::from([("helfer".to_owned(), agent(provider, store.clone()))]);
     let runs = RunManager::new(agents, store.clone(), sessions.clone());
     let app = Arc::new(App {
@@ -64,6 +73,7 @@ pub async fn serve_with(
         directory: directory(),
         clock: Arc::new(SystemClock),
         memory: Arc::new(can_core::InMemoryBank::new()),
+        schedules: Arc::new(can_server::Schedules::new(schedules)),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());

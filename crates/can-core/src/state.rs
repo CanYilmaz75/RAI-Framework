@@ -318,12 +318,8 @@ impl RunState {
 
     /// Text der letzten Assistentennachricht.
     pub fn last_assistant_text(&self) -> String {
-        let last = self
-            .messages
-            .iter()
-            .rev()
-            .find(|m| m.role == Role::Assistant);
-        last.map(Message::text).unwrap_or_default()
+        let mut assistant = self.messages.iter().filter(|m| m.role == Role::Assistant);
+        assistant.next_back().map(Message::text).unwrap_or_default()
     }
 
     fn push_message(&mut self, message: Message, seq: u64) {

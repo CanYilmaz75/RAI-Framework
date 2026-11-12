@@ -28,6 +28,9 @@ api_key_env = "CAN_MODEL_KEY"
 tools = ["read_file", "ls", "glob", "grep", "write_todos", "http_fetch"]   # auch: write_file, edit_file, shell
 # memory_file = "AGENTS.md"       # Gedächtnis: steht immer im System-Prompt
 # skills_dir = "skills"           # Skills: <name>/SKILL.md, bei Bedarf geladen
+# memory = true                   # remember/recall/forget: durchsuchbares Gedächtnis des Mandanten
+# subagents = ["recherche"]       # weiter oben definierte Agenten als Tool, wartet auf die Antwort
+# background_agents = ["recherche"]  # dasselbe im Hintergrund, mit eigener Sitzung
 workdir = "."
 http_allowed_hosts = ["example.com"]
 max_steps = 50
@@ -64,3 +67,11 @@ max_tokens = 0                     # 0 = unbegrenzt
 key_env = "ACME_ADA_KEY"           # mindestens 16 Zeichen
 user = "ada"
 role = "admin"                     # viewer, operator oder admin
+
+# Geplante Läufe: Cron mit fünf Feldern in UTC (oder @hourly, @daily, @weekly, @monthly).
+# [[schedules]]
+# name = "morgenbericht"
+# cron = "0 7 * * 1-5"
+# agent = "helfer"
+# tenant = "acme"
+# input = "Fasse die Neuigkeiten von gestern zusammen."

@@ -2,6 +2,18 @@
 
 ## Unveröffentlicht
 
+### Hintergrund-Agenten, Nachrichten im Lauf, Zeitpläne, Gedächtnis
+
+- Hintergrund-Sub-Agenten mit eigener Sitzung: `BackgroundAgents` mit Tools zum Starten, Abfragen,
+  Nachschicken, Abbrechen und Auflisten; im Dienst `subagents` und `background_agents`
+- Nachrichten während eines Laufs: `Run::inject`, Event `MessageInjected`; im Dienst `mode` mit
+  `reject`, `queue`, `inject` und `interrupt`
+- Geplante Läufe im Dienst: `[[schedules]]` mit Cron-Ausdrücken, Schutz vor Doppelstarts über
+  mehrere Worker, `GET /v1/schedules`
+- Durchsuchbares Gedächtnis über Sitzungen hinweg: `MemoryBank` in SQLite und PostgreSQL, Tools
+  `remember`, `recall`, `forget`, Namensraum pro Mandant (`Agent::run_in`), `/v1/memories`
+- Geändert: eine Nachricht an eine Sitzung mit laufendem Lauf ergibt ohne `mode` jetzt 409 statt 429
+
 ### Phase 6: WASM-Sandbox, alle Anbieter, Lizenz
 
 - Tools als WebAssembly-Module (WASI Preview 1) mit Freigaben für Dateien, Netzwerk-Hosts und

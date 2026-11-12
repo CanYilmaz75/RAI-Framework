@@ -5,12 +5,14 @@ pub mod auth;
 pub mod branch;
 mod build;
 pub mod config;
+pub mod cron;
 pub mod knowledge;
 pub mod meta;
 pub mod metrics;
 pub mod pgmeta;
 mod queue;
 pub mod runs;
+pub mod schedule;
 pub mod secrets;
 pub mod stream;
 
@@ -26,6 +28,7 @@ pub use config::ServerConfig;
 pub use meta::{MemoryDirectory, SessionDirectory, SessionMeta, SessionStatus};
 pub use pgmeta::PostgresDirectory;
 pub use runs::RunManager;
+pub use schedule::Schedules;
 
 /// Alles, was die Handler brauchen.
 pub struct App {
@@ -34,6 +37,8 @@ pub struct App {
     pub clock: Arc<dyn Clock>,
     /// Gedächtnis aller Mandanten; jeder sieht nur seinen Namensraum.
     pub memory: Arc<dyn MemoryBank>,
+    /// Geplante Läufe; `schedule::run` löst sie aus.
+    pub schedules: Arc<Schedules>,
 }
 
 /// Die Routen des Dienstes. `/healthz`, `/metrics` und die Oberfläche brauchen keinen Schlüssel;
@@ -73,6 +78,7 @@ pub fn router(app: Arc<App>) -> Router {
             post(api::resolve_approval),
         )
         .route("/v1/approvals", get(api::list_approvals))
+        .route("/v1/schedules", get(schedule::list))
         .route("/v1/memories", get(knowledge::list).post(knowledge::add))
         .route("/v1/memories/{id}", delete(knowledge::delete))
         .with_state(app)

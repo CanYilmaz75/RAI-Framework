@@ -65,6 +65,7 @@ async fn costs_budget_and_webhook() {
         directory,
         clock: Arc::new(can_runtime::SystemClock),
         memory: Arc::new(can_core::InMemoryBank::new()),
+        schedules: Arc::default(),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());

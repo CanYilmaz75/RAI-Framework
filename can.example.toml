@@ -5,6 +5,7 @@ model = "mein-modell"
 system = "Du bist ein hilfreicher Assistent."
 # workdir = "."
 # db = "can.db"
+# memory = true                      # remember/recall/forget; dauerhaft mit db
 
 [provider]
 kind = "openai"                      # anthropic, azure, gemini, vertex, vertex_anthropic, bedrock,

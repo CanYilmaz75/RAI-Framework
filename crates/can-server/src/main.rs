@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use can_runtime::SystemClock;
-use can_server::{App, RunManager, ServerConfig, router};
+use can_server::{App, RunManager, Schedules, ServerConfig, router};
 
 /// So oft sucht ein Worker nach Läufen, deren Besitzer ausgefallen ist.
 const RECOVER_EVERY: Duration = Duration::from_secs(15);
@@ -28,7 +28,9 @@ async fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
         directory,
         clock: Arc::new(SystemClock),
         memory: storage.memory,
+        schedules: Arc::new(Schedules::new(config.schedules.clone())),
     });
+    tokio::spawn(can_server::schedule::run(app.clone()));
 
     // Unterbrochene Läufe übernehmen: gleich beim Start und danach regelmäßig.
     tokio::spawn(async move {

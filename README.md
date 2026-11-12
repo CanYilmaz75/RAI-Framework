@@ -84,6 +84,8 @@ Health-Check unter `/healthz`. Alles unter `/v1` verlangt `Authorization: Bearer
 | `GET /v1/sessions/{id}/events` | Event-Strom (SSE); mit `?after=` oder `Last-Event-ID` ab einer Position |
 | `GET /v1/sessions/{id}/log` | gespeicherte Events als JSON |
 | `GET /v1/approvals` | offene Rückfragen des Mandanten |
+| `GET /v1/memories?query=` | Gedächtnis des Mandanten durchsuchen; `POST` ergänzt, `DELETE /v1/memories/{id}` löscht |
+| `GET /v1/schedules` | Zeitpläne des Mandanten mit nächster und letzter Ausführung |
 | `DELETE /v1/sessions/{id}` | Sitzung samt Log löschen (Rolle `admin`) |
 | `POST /v1/sessions/{id}/fork` | Sitzung ab einer Position verzweigen |
 | `GET /openapi.json` | Beschreibung der API |
@@ -97,6 +99,18 @@ Health-Check unter `/healthz`. Alles unter `/v1` verlangt `Authorization: Bearer
 - **Mehrere Worker:** Mit PostgreSQL teilen sich Worker Store und Sitzungsverzeichnis. Fällt einer aus,
   übernimmt ein anderer dessen Läufe, sobald die Sitzungssperre abgelaufen ist (30 Sekunden).
 - **Container:** Das `Dockerfile` baut ein Image mit `can-server` und `can`.
+- **Nachrichten während eines Laufs:** `POST /v1/sessions/{id}/messages` nimmt `mode` an:
+  `reject` (Vorgabe, 409), `queue` (startet nach dem laufenden Lauf), `inject` (geht vor der
+  nächsten Modellanfrage in den laufenden Lauf) oder `interrupt` (bricht ab und beginnt neu).
+- **Gedächtnis:** Mit `memory = true` bekommt ein Agent die Tools `remember`, `recall` und
+  `forget`. Einträge liegen im Store (verschlüsselt wie die Events) und gehören dem Mandanten;
+  die Suche gewichtet Stichworte nach TF-IDF.
+- **Zeitpläne:** `[[schedules]]` startet Läufe nach einem Cron-Ausdruck (fünf Felder, UTC, oder
+  `@daily` usw.), jede Auslösung in einer neuen Sitzung. Bei mehreren Workern startet nur einer;
+  verpasste Zeitpunkte werden nicht nachgeholt.
+- **Hintergrund-Agenten:** `background_agents = ["recherche"]` gibt einem Agenten Tools, mit denen
+  er einen weiter oben definierten Agenten in eigener Sitzung starten, nach dem Stand fragen, ihm
+  Nachrichten schicken und ihn abbrechen kann; `subagents` wartet dagegen auf die Antwort.
 
 ### Isolation und Sicherheit
 
@@ -205,6 +219,12 @@ let agent = Agent::builder()
     .build()?;
 ```
 
+`BackgroundAgents::new("recherche", "…", expert).tools()` liefert stattdessen fünf Tools
+(`recherche__start`, `__check`, `__message`, `__cancel`, `__list`): Der Agent arbeitet in eigener
+Sitzung weiter, während der aufrufende Lauf fortfährt. Aufgaben leben im Prozess; ihre Sitzungen
+bleiben im Store. Mit `Run::inject` kommt eine Nachricht in einen laufenden Lauf, ohne ihn
+abzubrechen.
+
 ## Speichern, Fortsetzen, Replay
 
 Die CLI schreibt jede Sitzung in eine SQLite-Datei (Vorgabe `can.db`) und gibt beim Start die
@@ -294,7 +314,8 @@ Die CLI bringt dafür diese Tools mit; im Dienst wählt man sie pro Agent in der
 | `write_todos` | Plan mit Aufgaben und Stand; jede Änderung steht als Event `PlanUpdated` im Log |
 | `load_skill` | lädt die Anleitung eines Skills |
 
-- **Gedächtnis:** Liegt im Arbeitsverzeichnis eine `AGENTS.md`, steht ihr Inhalt immer im System-Prompt.
+- **Projektwissen:** Liegt im Arbeitsverzeichnis eine `AGENTS.md`, steht ihr Inhalt immer im System-Prompt.
+  Mit `memory = true` in `can.toml` kommen die Tools `remember`, `recall` und `forget` dazu (dauerhaft mit `db`).
 - **Skills:** Ordner unter `.can/skills/<name>/` mit einer `SKILL.md`, deren Kopf `name` und
   `description` nennt. In den Prompt kommen nur diese beiden Angaben; den vollen Text holt das
   Modell bei Bedarf.

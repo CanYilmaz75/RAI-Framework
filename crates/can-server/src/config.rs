@@ -14,6 +14,7 @@ use serde::Deserialize;
 use crate::auth::{Directory, Quota, Role};
 use crate::meta::{MemoryDirectory, SessionDirectory};
 use crate::pgmeta::PostgresDirectory;
+use crate::schedule::ScheduleConfig;
 use crate::secrets::SecretSource;
 
 /// Fehler beim Lesen oder Anwenden der Konfiguration.
@@ -44,6 +45,9 @@ pub struct ServerConfig {
     pub agents: Vec<AgentConfig>,
     #[serde(default)]
     pub tenants: Vec<TenantConfig>,
+    /// Geplante Läufe.
+    #[serde(default)]
+    pub schedules: Vec<ScheduleConfig>,
 }
 
 fn default_listen() -> String {
@@ -205,6 +209,7 @@ impl ServerConfig {
                 }
             }
         }
+        crate::schedule::validate(&config)?;
         Ok(config)
     }
 
