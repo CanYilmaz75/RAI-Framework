@@ -258,6 +258,21 @@ impl Store for SqliteStore {
             .transpose()
     }
 
+    async fn delete(&self, id: SessionId) -> Result<(), StoreError> {
+        let session = id.to_string();
+        self.with(move |connection| {
+            let transaction = connection.transaction().map_err(backend)?;
+            transaction
+                .execute("DELETE FROM events WHERE session_id = ?1", params![session])
+                .map_err(backend)?;
+            transaction
+                .execute("DELETE FROM sessions WHERE id = ?1", params![session])
+                .map_err(backend)?;
+            transaction.commit().map_err(backend)
+        })
+        .await
+    }
+
     async fn verify(&self, id: SessionId) -> Result<Option<u64>, StoreError> {
         self.with(move |connection| {
             let mut statement = connection

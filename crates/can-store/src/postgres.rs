@@ -245,6 +245,21 @@ impl Store for PostgresStore {
             .transpose()
     }
 
+    async fn delete(&self, id: SessionId) -> Result<(), StoreError> {
+        let session = id.to_string();
+        let mut client = self.client.lock().await;
+        let transaction = client.transaction().await.map_err(backend)?;
+        transaction
+            .execute("DELETE FROM can_events WHERE session_id = $1", &[&session])
+            .await
+            .map_err(backend)?;
+        transaction
+            .execute("DELETE FROM can_sessions WHERE id = $1", &[&session])
+            .await
+            .map_err(backend)?;
+        transaction.commit().await.map_err(backend)
+    }
+
     async fn verify(&self, id: SessionId) -> Result<Option<u64>, StoreError> {
         let client = self.client.lock().await;
         let rows = client

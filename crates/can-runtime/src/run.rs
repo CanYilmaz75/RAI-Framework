@@ -18,6 +18,8 @@ pub enum RunError {
     Closed,
     #[error("die Eingabe wurde vom Inhaltsfilter abgelehnt: {0}")]
     Blocked(String),
+    #[error("das Modell lieferte keine gültige strukturierte Antwort: {0}")]
+    Structured(String),
     #[error("die Lauf-Task ist abgestürzt: {0}")]
     Task(String),
 }

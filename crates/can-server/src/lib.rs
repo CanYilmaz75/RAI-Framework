@@ -43,7 +43,10 @@ pub fn router(app: Arc<App>) -> Router {
             "/v1/sessions",
             post(api::create_session).get(api::list_sessions),
         )
-        .route("/v1/sessions/{id}", get(api::get_session))
+        .route(
+            "/v1/sessions/{id}",
+            get(api::get_session).delete(api::delete_session),
+        )
         .route("/v1/sessions/{id}/messages", post(api::post_message))
         .route("/v1/sessions/{id}/events", get(stream::events))
         .route("/v1/sessions/{id}/log", get(api::log))

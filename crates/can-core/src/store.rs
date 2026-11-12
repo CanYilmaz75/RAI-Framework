@@ -54,6 +54,10 @@ pub trait Store: Send + Sync {
     /// Gibt die Sperre frei, falls `owner` sie hält.
     async fn release(&self, id: SessionId, owner: &str) -> Result<(), StoreError>;
 
+    /// Löscht das Log der Sitzung samt Sperre, etwa nach Ablauf einer Aufbewahrungsfrist.
+    /// Blobs bleiben, weil mehrere Sitzungen denselben Inhalt teilen können.
+    async fn delete(&self, id: SessionId) -> Result<(), StoreError>;
+
     /// Prüft, ob das Log der Sitzung seit dem Schreiben verändert wurde. Liefert die erste
     /// Position, an der die Hash-Kette nicht stimmt; `None` heißt unversehrt. Stores ohne
     /// Kette melden immer `None`.
@@ -144,6 +148,13 @@ impl Store for MemoryStore {
         inner
             .leases
             .insert(id, (owner.to_owned(), lease_until(now, ttl)));
+        Ok(())
+    }
+
+    async fn delete(&self, id: SessionId) -> Result<(), StoreError> {
+        let mut inner = self.lock()?;
+        inner.sessions.remove(&id);
+        inner.leases.remove(&id);
         Ok(())
     }
 

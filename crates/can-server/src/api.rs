@@ -309,6 +309,25 @@ pub async fn log(
     Ok(Json(json!({"events": events})))
 }
 
+/// Löscht eine Sitzung samt Log, etwa auf Wunsch des Nutzers oder nach Ablauf einer Frist.
+pub async fn delete_session(
+    State(app): State<Arc<App>>,
+    principal: Principal,
+    Path(id): Path<SessionId>,
+) -> Result<StatusCode, ApiError> {
+    require(&principal, Role::Admin)?;
+    session_of(&app, &principal, id).await?;
+    if app.runs.live(id).is_some() {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "Der Lauf ist noch unterwegs; zuerst abbrechen.",
+        ));
+    }
+    app.runs.store.delete(id).await.map_err(internal)?;
+    app.runs.directory.delete(id).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Prüft die Hash-Kette der Sitzung: wurde das Log nach dem Schreiben verändert?
 pub async fn verify(
     State(app): State<Arc<App>>,

@@ -137,6 +137,24 @@ async fn blobs_and_leases(store: &dyn Store) {
         .acquire(session, "worker-c", Timestamp(32_003), ttl)
         .await
         .unwrap();
+    // Löschen entfernt Log und Sperre; danach ist die Sitzung wie neu.
+    let gone = SessionId::new();
+    store
+        .acquire(gone, "worker-a", Timestamp(1), ttl)
+        .await
+        .unwrap();
+    store
+        .append(gone, &[requested(0), requested(1)])
+        .await
+        .unwrap();
+    store.delete(gone).await.unwrap();
+    assert!(store.load(gone).await.unwrap().is_empty());
+    store
+        .acquire(gone, "worker-b", Timestamp(2), ttl)
+        .await
+        .unwrap();
+    store.append(gone, &[requested(0)]).await.unwrap();
+    store.delete(SessionId::new()).await.unwrap();
     // Die Sperre stört das Log nicht.
     store.append(session, &[requested(0)]).await.unwrap();
     assert_eq!(store.load(session).await.unwrap().len(), 1);

@@ -266,3 +266,44 @@ async fn admins_can_verify_that_a_log_is_intact() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+async fn admins_can_delete_a_session_and_its_log() {
+    let server = serve(FakeProvider::new().text("hallo")).await;
+    let (_, body) = server
+        .post(
+            "bob-key",
+            "/v1/sessions",
+            json!({"agent": "helfer", "input": "hi"}),
+        )
+        .await;
+    let session = body["session_id"].as_str().unwrap().to_owned();
+    server.wait_status("bob-key", &session, "idle").await;
+    let path = format!("{}/v1/sessions/{session}", server.base);
+    let delete = |key: &'static str| Client::new().delete(&path).bearer_auth(key).send();
+    assert_eq!(
+        delete("ada-key").await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        delete("bob-key").await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        server
+            .get("bob-key", &format!("/v1/sessions/{session}"))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert!(
+        can_core::Store::load(server.store.as_ref(), session.parse().unwrap())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        delete("bob-key").await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+}

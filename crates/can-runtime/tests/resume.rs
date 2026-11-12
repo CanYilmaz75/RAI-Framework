@@ -59,6 +59,10 @@ impl Store for CrashingStore {
     async fn release(&self, id: SessionId, owner: &str) -> Result<(), StoreError> {
         self.inner.release(id, owner).await
     }
+
+    async fn delete(&self, id: SessionId) -> Result<(), StoreError> {
+        self.inner.delete(id).await
+    }
 }
 
 /// Modell-Ersatz ohne eigenen Zustand: die Antwort hängt nur vom Verlauf ab, damit ein
