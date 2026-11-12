@@ -12,10 +12,12 @@ const RECOVER_EVERY: Duration = Duration::from_secs(15);
 
 async fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig::parse(&std::fs::read_to_string(path)?)?;
-    let lookup = |name: &str| std::env::var(name).ok();
+    // Alle genannten Secrets einmal aus der Quelle holen; die Konfiguration nennt nur Namen.
+    let secrets = config.secrets.resolve(&config.secret_names()).await?;
+    let lookup = |name: &str| secrets.get(name).cloned();
     let directory = config.directory(lookup)?;
     let (store, sessions) = config.open_store(lookup).await?;
-    let agents = config.agents(&store, lookup)?;
+    let agents = config.agents(&store, lookup).await?;
     if agents.is_empty() {
         return Err("Die Konfiguration enthält keinen Agenten.".into());
     }

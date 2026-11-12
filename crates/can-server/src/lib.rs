@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod auth;
+mod build;
 pub mod config;
 pub mod meta;
 pub mod metrics;
@@ -46,6 +47,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/sessions/{id}/messages", post(api::post_message))
         .route("/v1/sessions/{id}/events", get(stream::events))
         .route("/v1/sessions/{id}/log", get(api::log))
+        .route("/v1/sessions/{id}/verify", get(api::verify))
         .route("/v1/sessions/{id}/cancel", post(api::cancel))
         .route("/v1/sessions/{id}/resume", post(api::resume))
         .route(

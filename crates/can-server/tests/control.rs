@@ -225,3 +225,44 @@ async fn another_worker_takes_over_after_a_crash() {
     );
     assert_eq!(second.app.runs.recover().await, 0);
 }
+
+#[tokio::test]
+async fn admins_can_verify_that_a_log_is_intact() {
+    let server = serve(FakeProvider::new().text("hallo")).await;
+    let (status, body) = server
+        .post(
+            "bob-key",
+            "/v1/sessions",
+            json!({"agent": "helfer", "input": "hi"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session = body["session_id"].as_str().unwrap().to_owned();
+    server.wait_status("bob-key", &session, "idle").await;
+    let (status, body) = server
+        .get("bob-key", &format!("/v1/sessions/{session}/verify"))
+        .await;
+    assert_eq!(
+        (status, body),
+        (
+            StatusCode::OK,
+            json!({"intact": true, "first_broken_seq": null})
+        )
+    );
+
+    let own = server.create("ada-key", "hi").await;
+    assert_eq!(
+        server
+            .get("ada-key", &format!("/v1/sessions/{own}/verify"))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        server
+            .get("bob-key", &format!("/v1/sessions/{own}/verify"))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}

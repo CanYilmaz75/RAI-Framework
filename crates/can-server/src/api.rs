@@ -309,6 +309,20 @@ pub async fn log(
     Ok(Json(json!({"events": events})))
 }
 
+/// Prüft die Hash-Kette der Sitzung: wurde das Log nach dem Schreiben verändert?
+pub async fn verify(
+    State(app): State<Arc<App>>,
+    principal: Principal,
+    Path(id): Path<SessionId>,
+) -> Result<Json<Value>, ApiError> {
+    require(&principal, Role::Admin)?;
+    session_of(&app, &principal, id).await?;
+    let broken = app.runs.store.verify(id).await.map_err(internal)?;
+    Ok(Json(
+        json!({"intact": broken.is_none(), "first_broken_seq": broken}),
+    ))
+}
+
 pub async fn healthz() -> &'static str {
     "ok"
 }

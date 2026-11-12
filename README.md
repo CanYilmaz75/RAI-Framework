@@ -92,9 +92,27 @@ Health-Check unter `/healthz`. Alles unter `/v1` verlangt `Authorization: Bearer
   übernimmt ein anderer dessen Läufe, sobald die Sitzungssperre abgelaufen ist (30 Sekunden).
 - **Container:** Das `Dockerfile` baut ein Image mit `can-server` und `can`.
 
-Was dem Dienst noch fehlt: Anmeldung über SSO, eine Sandbox pro Lauf, Secret-Verwaltung über
-Vault oder KMS, TLS zur Datenbank und ein Verbindungspool. Das Token-Budget zählt pro Prozess
-und beginnt nach einem Neustart bei null.
+### Isolation und Sicherheit
+
+- **Arbeitsverzeichnis pro Sitzung:** Im Dienst arbeitet jede Sitzung in einem eigenen Unterverzeichnis.
+- **Sandbox für `shell`:** `namespaces` (über `unshare`: kein Netzwerk, eigene Prozesstabelle,
+  Grenzen für Speicher, CPU-Zeit und Prozesse) oder `docker` (Wegwerf-Container, nur das
+  Arbeitsverzeichnis eingehängt, Wurzel schreibgeschützt, keine Capabilities). `namespaces` trennt
+  das Dateisystem nicht; dafür ist `docker` gedacht.
+- **Schutz vor Datenabfluss:** Tools lassen sich als vertraulich markieren. Hat eine Sitzung
+  solche Daten gesehen, gilt für jedes externe Tool mindestens `ask` oder `deny`.
+- **Inhaltsfilter:** gesperrte Begriffe in Eingaben und Modellantworten; hinter dem Trait
+  `Moderator` lässt sich ein externer Dienst anschließen.
+- **Verschlüsselung im Ruhezustand:** Events und Blobs in SQLite und PostgreSQL, ChaCha20-Poly1305.
+- **Manipulationssicheres Protokoll:** Jede Zeile trägt ein Glied einer Hash-Kette;
+  `GET /v1/sessions/{id}/verify` meldet die erste veränderte Position.
+- **Secrets:** aus Umgebungsvariablen, eingehängten Dateien oder HashiCorp Vault (KV v2).
+- **MCP:** Server pro Agent in der Konfiguration, HTTP-Server mit Bearer-Token.
+
+Was dem Dienst noch fehlt: Anmeldung über SSO, ein Netzwerk-Proxy für ausgehende Verbindungen,
+ein Schlüssel pro Mandant, TLS zur Datenbank und ein Verbindungspool. Das Token-Budget zählt pro
+Prozess und beginnt nach einem Neustart bei null. Die Docker-Sandbox ist geschrieben, aber
+mangels Docker in der Entwicklungsumgebung nicht ausgeführt worden.
 
 ## Konfigurationsdatei
 

@@ -4,6 +4,16 @@
 listen = "127.0.0.1:8080"
 # worker = "worker-1"              # Vorgabe: Rechnername; muss pro Worker eindeutig sein
 
+# Verschlüsselung im Ruhezustand: Variable mit 64 Hex-Zeichen (openssl rand -hex 32).
+# encryption_key_env = "CAN_STORE_KEY"
+
+# Woher die genannten Secrets kommen: "env" (Vorgabe), "files" oder "vault".
+# [secrets]
+# kind = "vault"
+# addr = "https://vault.example.com"
+# path = "secret/data/can"
+# token_env = "VAULT_TOKEN"
+
 [store]
 kind = "postgres"                  # oder "sqlite" (mit path) oder "memory" zum Ausprobieren
 url_env = "CAN_DATABASE_URL"       # postgres://nutzer:passwort@host:5432/datenbank
@@ -19,6 +29,22 @@ tools = ["read_file", "http_fetch"]
 workdir = "."
 http_allowed_hosts = ["example.com"]
 max_steps = 50
+# isolate_workdir = true          # Vorgabe: eigenes Unterverzeichnis pro Sitzung
+# confidential_tools = ["read_file"]
+# exfiltration_guard = "deny"     # externe Tools sperren, sobald vertrauliche Daten im Verlauf stehen
+# blocked_terms = ["Projekt Zeus"]
+
+# Sandbox für das Tool shell: "namespaces" (unshare) oder "docker".
+# [agents.sandbox]
+# mode = "docker"
+# image = "debian:bookworm-slim"
+# network = false
+# memory_mb = 512
+# max_processes = 64
+
+# [agents.mcp.suche]
+# url = "https://mcp.example.com/mcp"
+# token_env = "MCP_SUCHE_TOKEN"
 
 [[agents.rules]]
 tool = "http_fetch"
