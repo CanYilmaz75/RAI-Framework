@@ -2,6 +2,8 @@
 
 mod app;
 pub mod config;
+pub mod eval;
+pub mod inspect;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -14,7 +16,7 @@ use can_core::{
 use can_runtime::{BuildError, Outcome, Run, RunError};
 use can_tools::McpError;
 
-pub use app::{App, DEFAULT_SYSTEM, Options, build_app};
+pub use app::{App, DEFAULT_SYSTEM, Options, build_app, open_store};
 pub use config::Config;
 
 /// Fehler der CLI.

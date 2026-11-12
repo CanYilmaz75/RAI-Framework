@@ -27,3 +27,5 @@ workspace = true
 [[bin]]
 name = "can"
 path = "src/main.rs"
+# Die Bibliotheks-Doku gehört dem Fassaden-Crate gleichen Namens.
+doc = false

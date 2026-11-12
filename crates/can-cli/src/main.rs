@@ -5,8 +5,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use can_cli::config::ProviderKind;
+use can_cli::eval::{Suite, run_suite};
+use can_cli::inspect::inspect;
 use can_cli::{
-    App, CliError, Config, Options, Terminal, build_app, chat_turn, resume_turn, user_message,
+    App, CliError, Config, Options, Terminal, build_app, chat_turn, open_store, resume_turn,
+    user_message,
 };
 use can_core::{Decision, FinishReason, SessionId, ToolCall};
 use can_runtime::Outcome;
@@ -49,16 +52,19 @@ struct Common {
     /// Modellantworten für ein späteres Replay in diese Datei schreiben.
     #[arg(long)]
     record: Option<PathBuf>,
+    /// Modellantworten aus dieser Aufzeichnung abspielen statt einen Anbieter zu fragen.
+    #[arg(long)]
+    replay: Option<PathBuf>,
 }
 
 impl Common {
-    async fn app(self) -> Result<App, CliError> {
+    fn options(self) -> Result<Options, CliError> {
         let config = Config::load(self.config.as_deref())?;
         let db = self
             .db
             .or_else(|| config.db.clone())
             .unwrap_or_else(|| PathBuf::from("can.db"));
-        build_app(&Options {
+        Ok(Options {
             model: self.model,
             system: self.system,
             workdir: self.workdir,
@@ -66,9 +72,13 @@ impl Common {
             provider: self.provider,
             db: Some(db),
             record: self.record,
+            replay: self.replay,
             config,
         })
-        .await
+    }
+
+    async fn app(self) -> Result<App, CliError> {
+        build_app(&self.options()?).await
     }
 }
 
@@ -91,6 +101,19 @@ enum Command {
     Resume {
         /// Kennung der Sitzung, wie `chat` sie beim Start ausgibt.
         session: SessionId,
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Zeigt den Verlauf einer Sitzung als Zeitleiste aus dem Store.
+    Inspect {
+        session: SessionId,
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Lässt eine Sammlung von Testfällen laufen; endet mit Fehler, wenn einer scheitert.
+    Eval {
+        /// TOML-Datei mit den Fällen.
+        file: PathBuf,
         #[command(flatten)]
         common: Common,
     },
@@ -164,6 +187,18 @@ async fn run(command: Command) -> Result<(), CliError> {
             image,
             common,
         } => chat(common.app().await?, session, prompt, image).await,
+        Command::Inspect { session, common } => {
+            let store = open_store(&common.options()?)?;
+            inspect(store.as_ref(), session, &mut std::io::stdout()).await
+        }
+        Command::Eval { file, common } => {
+            let suite = Suite::parse(&std::fs::read_to_string(&file)?)?;
+            let app = common.app().await?;
+            match run_suite(&app, &suite, &mut std::io::stdout()).await? {
+                (_, 0) => Ok(()),
+                (_, failed) => Err(CliError::Config(format!("{failed} Fälle gescheitert"))),
+            }
+        }
         Command::Resume { session, common } => {
             let app = common.app().await?;
             let (mut out, mut approve) = (std::io::stdout(), ask_user);
