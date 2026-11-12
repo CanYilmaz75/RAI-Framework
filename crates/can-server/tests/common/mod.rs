@@ -33,6 +33,7 @@ pub fn directory() -> Directory {
             Quota {
                 max_concurrent_runs: 1,
                 max_tokens: 0,
+                max_cost_cents: 0,
             },
         )
         .key("ada-key", "acme", "ada", Role::Operator)

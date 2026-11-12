@@ -88,6 +88,14 @@ fn check_quota(app: &App, principal: &Principal) -> Result<(), ApiError> {
             "Das Token-Budget dieses Mandanten ist aufgebraucht.",
         ));
     }
+    if quota.max_cost_cents > 0
+        && app.runs.metrics.cost_cents(&principal.tenant) >= quota.max_cost_cents
+    {
+        return Err(error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Das Kostenbudget dieses Mandanten ist aufgebraucht.",
+        ));
+    }
     Ok(())
 }
 

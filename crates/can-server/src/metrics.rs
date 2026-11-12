@@ -13,6 +13,8 @@ pub struct Metrics {
     finished: Mutex<BTreeMap<String, u64>>,
     /// Verbrauchte Token nach Mandant.
     tokens: Mutex<BTreeMap<String, u64>>,
+    /// Kosten nach Mandant in Millionstel der Währungseinheit.
+    cost_micros: Mutex<BTreeMap<String, u64>>,
 }
 
 impl Metrics {
@@ -25,13 +27,27 @@ impl Metrics {
     }
 
     /// Ein Lauf ist zu Ende: Grund und Token-Verbrauch des Mandanten.
-    pub fn run_finished(&self, reason: &str, tenant: &str, tokens: u64) {
+    pub fn run_finished(&self, reason: &str, tenant: &str, tokens: u64, cost: f64) {
+        if let Ok(mut costs) = self.cost_micros.lock() {
+            *costs.entry(tenant.to_owned()).or_default() +=
+                (cost.max(0.0) * 1_000_000.0).round() as u64;
+        }
         if let Ok(mut finished) = self.finished.lock() {
             *finished.entry(reason.to_owned()).or_default() += 1;
         }
         if let Ok(mut used) = self.tokens.lock() {
             *used.entry(tenant.to_owned()).or_default() += tokens;
         }
+    }
+
+    /// Bisherige Kosten eines Mandanten in Cent.
+    pub fn cost_cents(&self, tenant: &str) -> u64 {
+        self.cost_micros
+            .lock()
+            .ok()
+            .and_then(|costs| costs.get(tenant).copied())
+            .unwrap_or(0)
+            / 10_000
     }
 
     /// Bisher verbrauchte Token eines Mandanten.
@@ -67,6 +83,15 @@ impl Metrics {
                 ));
             }
         }
+        out.push_str("# TYPE can_cost_total counter\n");
+        if let Ok(costs) = self.cost_micros.lock() {
+            for (tenant, micros) in costs.iter() {
+                out.push_str(&format!(
+                    "can_cost_total{{tenant=\"{tenant}\"}} {:.6}\n",
+                    *micros as f64 / 1_000_000.0
+                ));
+            }
+        }
         out.push_str("# TYPE can_approvals_resolved_total counter\n");
         out.push_str(&format!(
             "can_approvals_resolved_total {}\n",
@@ -92,9 +117,10 @@ mod tests {
         metrics.run_started();
         metrics.run_started();
         metrics.approval_resolved();
-        metrics.run_finished("completed", "acme", 120);
-        metrics.run_finished("completed", "acme", 30);
-        metrics.run_finished("cancelled", "globex", 5);
+        metrics.run_finished("completed", "acme", 120, 0.25);
+        metrics.run_finished("completed", "acme", 30, 1.0);
+        metrics.run_finished("cancelled", "globex", 5, 0.0);
+        assert_eq!(metrics.cost_cents("acme"), 125);
         assert_eq!(metrics.tokens_used("acme"), 150);
         assert_eq!(metrics.tokens_used("fremd"), 0);
         let text = metrics.render(3, 1);
@@ -104,6 +130,7 @@ mod tests {
             "can_runs_finished_total{reason=\"cancelled\"} 1",
             "can_tokens_total{tenant=\"acme\"} 150",
             "can_approvals_resolved_total 1",
+            "can_cost_total{tenant=\"acme\"} 1.250000",
             "can_runs_running 3",
             "can_approvals_pending 1",
         ] {

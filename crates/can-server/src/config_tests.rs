@@ -66,7 +66,8 @@ fn full_file_parses_and_builds_directory_and_agents() {
         directory.quota("acme"),
         Quota {
             max_concurrent_runs: 3,
-            max_tokens: 500_000
+            max_tokens: 500_000,
+            max_cost_cents: 0
         }
     );
 

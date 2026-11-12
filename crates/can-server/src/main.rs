@@ -21,7 +21,7 @@ async fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     if agents.is_empty() {
         return Err("Die Konfiguration enthält keinen Agenten.".into());
     }
-    let runs = RunManager::new(agents, store, sessions);
+    let runs = RunManager::with(agents, store, sessions, config.prices(), config.webhooks());
     let app = Arc::new(App {
         runs: runs.clone(),
         directory,

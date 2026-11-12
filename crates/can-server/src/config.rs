@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use can_core::{Decision, MemoryStore, Rule, Store};
+use can_core::{Decision, MemoryStore, Pricing, Rule, Store};
 use can_runtime::Agent;
 use can_store::{Cipher, PostgresStore, SqliteStore};
 use can_tools::Sandbox;
@@ -85,6 +85,8 @@ pub struct AgentConfig {
     pub max_steps: Option<u32>,
     pub max_tokens: Option<u64>,
     pub timeout_secs: Option<u64>,
+    /// Preise des Modells je Million Token, für Kosten und Kostenbudget.
+    pub pricing: Option<Pricing>,
     /// Sandbox für `shell`. Ohne Angabe läuft `shell` ungeschützt.
     pub sandbox: Option<Sandbox>,
     /// Eigenes Arbeitsverzeichnis pro Sitzung; im Dienst die Vorgabe.
@@ -125,6 +127,8 @@ pub struct TenantConfig {
     pub name: String,
     #[serde(flatten)]
     pub quota: Option<Quota>,
+    /// Adresse, die nach jedem Lauf des Mandanten per POST benachrichtigt wird.
+    pub webhook_url: Option<String>,
     #[serde(default)]
     pub keys: Vec<KeyConfig>,
 }
@@ -189,6 +193,22 @@ impl ServerConfig {
             }
         }
         Ok(directory)
+    }
+
+    /// Preise je Agent.
+    pub fn prices(&self) -> HashMap<String, Pricing> {
+        self.agents
+            .iter()
+            .filter_map(|agent| Some((agent.name.clone(), agent.pricing?)))
+            .collect()
+    }
+
+    /// Webhook je Mandant.
+    pub fn webhooks(&self) -> HashMap<String, String> {
+        self.tenants
+            .iter()
+            .filter_map(|tenant| Some((tenant.name.clone(), tenant.webhook_url.clone()?)))
+            .collect()
     }
 
     /// Namen aller Secrets, die diese Konfiguration nennt.
