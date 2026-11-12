@@ -4,6 +4,7 @@
 use std::sync::Mutex;
 
 use async_trait::async_trait;
+use can_core::Secret;
 use serde_json::Value;
 
 use super::{McpError, PROTOCOL_VERSION, Transport};
@@ -14,6 +15,8 @@ pub struct HttpTransport {
     url: String,
     /// Vom Server beim Handshake vergebene Sitzung.
     session: Mutex<Option<String>>,
+    /// Zugangstoken für den Header `Authorization`.
+    bearer: Option<Secret<String>>,
 }
 
 fn io(error: impl std::fmt::Display) -> McpError {
@@ -27,7 +30,16 @@ impl HttpTransport {
             client: reqwest::Client::new(),
             url: url.into(),
             session: Mutex::new(None),
+            bearer: None,
         }
+    }
+}
+
+impl HttpTransport {
+    /// Sendet bei jeder Anfrage dieses Token als `Authorization: Bearer`.
+    pub fn with_bearer(mut self, token: Secret<String>) -> Self {
+        self.bearer = Some(token);
+        self
     }
 }
 
@@ -50,6 +62,9 @@ impl Transport for HttpTransport {
             .header("accept", "application/json, text/event-stream")
             .header("mcp-protocol-version", PROTOCOL_VERSION)
             .body(message.to_string());
+        if let Some(token) = &self.bearer {
+            request = request.bearer_auth(token.expose());
+        }
         if let Some(session) = session {
             request = request.header("mcp-session-id", session);
         }

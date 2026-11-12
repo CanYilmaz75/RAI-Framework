@@ -7,6 +7,7 @@ pub mod meta;
 pub mod metrics;
 pub mod pgmeta;
 pub mod runs;
+pub mod secrets;
 pub mod stream;
 
 use std::sync::Arc;

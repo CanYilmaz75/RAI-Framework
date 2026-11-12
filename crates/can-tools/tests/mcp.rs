@@ -172,3 +172,20 @@ async fn unreachable_http_server_is_an_error() {
     let result = McpClient::connect_http("x", "http://127.0.0.1:1/mcp").await;
     assert!(matches!(result, Err(McpError::Io(_))));
 }
+
+#[tokio::test]
+async fn bearer_token_is_sent_with_every_request() {
+    use can_tools::mcp::HttpTransport;
+    let (url, heads) = http_server().await;
+    let transport =
+        HttpTransport::new(url).with_bearer(can_core::Secret::new("mcp-token-123".to_owned()));
+    let client = McpClient::connect("demo", transport).await.unwrap();
+    assert_eq!(client.tools().await.unwrap().len(), 3);
+    let heads = heads.lock().unwrap();
+    assert!(
+        heads.len() >= 4
+            && heads
+                .iter()
+                .all(|head| head.contains("authorization: bearer mcp-token-123"))
+    );
+}
