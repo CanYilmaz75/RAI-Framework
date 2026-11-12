@@ -6,6 +6,7 @@ pub mod context;
 mod driver;
 mod driver_model;
 mod exec;
+mod fork;
 pub mod redact;
 pub mod registry;
 pub mod run;

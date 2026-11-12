@@ -10,6 +10,7 @@ pub mod read_file;
 pub mod sandbox;
 pub mod search;
 mod shell_tool;
+pub mod skills;
 #[cfg(test)]
 pub(crate) mod testkit;
 pub mod todos;
@@ -24,5 +25,6 @@ pub use read_file::ReadFile;
 pub use sandbox::{Sandbox, SandboxMode};
 pub use search::{glob, grep, ls};
 pub use shell_tool::{SandboxedShell, shell};
+pub use skills::{LoadSkill, SkillSet, load_memory, system_prompt};
 pub use todos::WriteTodos;
 pub use write_tool::write_file;

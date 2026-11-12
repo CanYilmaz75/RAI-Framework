@@ -20,6 +20,8 @@ pub enum RunError {
     Blocked(String),
     #[error("das Modell lieferte keine gültige strukturierte Antwort: {0}")]
     Structured(String),
+    #[error("an dieser Position gibt es nichts zu verzweigen")]
+    NothingToFork,
     #[error("die Lauf-Task ist abgestürzt: {0}")]
     Task(String),
 }

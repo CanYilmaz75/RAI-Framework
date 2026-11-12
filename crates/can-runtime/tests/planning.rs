@@ -196,3 +196,107 @@ async fn edited_arguments_must_match_the_schema_or_the_question_stays_open() {
     assert_eq!(run.outcome().await.unwrap().reason, FinishReason::Completed);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
+
+/// Verzweigen: die neue Sitzung übernimmt den Verlauf bis zur Position, die Quelle bleibt.
+#[tokio::test]
+async fn fork_copies_the_log_up_to_a_position_and_both_sessions_continue() {
+    let provider = Arc::new(
+        FakeProvider::new()
+            .text("eins")
+            .text("zwei")
+            .text("zwei-b")
+            .text("drei"),
+    );
+    let store = Arc::new(MemoryStore::new());
+    let agent = Agent::builder()
+        .provider_arc(provider.clone())
+        .model("test")
+        .store_arc(store.clone())
+        .build()
+        .unwrap();
+    let source = SessionId::new();
+    agent.complete(source, "erste Frage").await.unwrap();
+    agent.complete(source, "zweite Frage").await.unwrap();
+
+    // Positionen 0 bis 3 sind der erste Lauf.
+    let fork = agent.fork(source, 3).await.unwrap();
+    assert_ne!(fork, source);
+    assert_eq!(store.load(fork).await.unwrap().len(), 4);
+    assert_eq!(
+        store.load(source).await.unwrap().len(),
+        8,
+        "die Quelle bleibt unverändert"
+    );
+
+    assert_eq!(
+        agent
+            .complete(fork, "andere zweite Frage")
+            .await
+            .unwrap()
+            .text,
+        "zwei-b"
+    );
+    let texts: Vec<String> = provider.requests()[2]
+        .messages
+        .iter()
+        .map(|m| m.text())
+        .collect();
+    assert_eq!(
+        texts,
+        ["erste Frage", "eins", "andere zweite Frage"],
+        "der Zweig kennt nur den ersten Lauf"
+    );
+    assert_eq!(
+        agent.complete(source, "dritte Frage").await.unwrap().text,
+        "drei"
+    );
+    assert_eq!(provider.requests()[3].messages.len(), 5);
+}
+
+#[tokio::test]
+async fn fork_in_the_middle_of_a_run_closes_it_cleanly() {
+    let provider = Arc::new(
+        FakeProvider::new()
+            .tool_call("schreib", json!({"text": "x"}))
+            .text("neu angefangen"),
+    );
+    let store = Arc::new(MemoryStore::new());
+    let agent = Agent::builder()
+        .provider_arc(provider.clone())
+        .model("test")
+        .tool(TestTool::writer("schreib"))
+        .store_arc(store.clone())
+        .build()
+        .unwrap();
+    let source = SessionId::new();
+    let mut run = agent.run(source, "los").await.unwrap();
+    wait_for_approval(&mut run).await;
+
+    // Schnitt nach der Tool-Anforderung, vor jeder Freigabe.
+    let fork = agent.fork(source, 3).await.unwrap();
+    let log = store.load(fork).await.unwrap();
+    assert!(matches!(
+        log.last().unwrap().event,
+        Event::RunFinished {
+            reason: FinishReason::Cancelled
+        }
+    ));
+    assert!(
+        log.iter()
+            .enumerate()
+            .all(|(position, envelope)| envelope.seq == position as u64)
+    );
+    assert_eq!(
+        agent.complete(fork, "anders").await.unwrap().text,
+        "neu angefangen"
+    );
+    // Der offene Aufruf hat im Zweig ein Ergebnis, sonst wäre der Verlauf für das Modell ungültig.
+    let request = provider.requests().pop().unwrap();
+    assert!(request.messages.iter().any(|m| m.role == Role::Tool));
+
+    assert!(matches!(
+        agent.fork(SessionId::new(), 5).await,
+        Err(can_runtime::RunError::NothingToFork)
+    ));
+    run.cancel();
+}
