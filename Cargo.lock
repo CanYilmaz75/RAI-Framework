@@ -331,6 +331,7 @@ dependencies = [
  "can-macros",
  "can-providers",
  "can-store",
+ "can-tools",
  "futures",
  "proptest",
  "serde",

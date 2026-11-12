@@ -96,6 +96,26 @@ pub enum FinishReason {
     Error { message: String },
 }
 
+/// Name des Planungs-Tools. Ruft das Modell es erfolgreich auf, wird sein Argument zum Plan
+/// der Sitzung und als `PlanUpdated` festgehalten.
+pub const PLAN_TOOL: &str = "write_todos";
+
+/// Stand einer Aufgabe im Plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+/// Eine Aufgabe im Plan des Agenten.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Todo {
+    pub content: String,
+    pub status: TodoStatus,
+}
+
 /// Ein Event samt Position, Lauf, Zeit und Formatversion.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -153,6 +173,15 @@ pub enum Event {
         up_to_seq: u64,
         summary: Message,
     },
+    /// Der Plan der Sitzung wurde neu geschrieben.
+    PlanUpdated {
+        todos: Vec<Todo>,
+    },
+    /// Ein Mensch hat bei der Freigabe die Argumente des Aufrufs geändert.
+    ToolArgsEdited {
+        call_id: CallId,
+        input: Value,
+    },
     RunFinished {
         reason: FinishReason,
     },
@@ -177,6 +206,8 @@ impl Event {
             Event::ToolStarted { .. } => "tool_started",
             Event::ToolFinished { .. } => "tool_finished",
             Event::Compacted { .. } => "compacted",
+            Event::PlanUpdated { .. } => "plan_updated",
+            Event::ToolArgsEdited { .. } => "tool_args_edited",
             Event::RunFinished { .. } => "run_finished",
         }
     }
@@ -231,6 +262,16 @@ mod tests {
             Event::Compacted {
                 up_to_seq: 9,
                 summary: Message::assistant("kurz"),
+            },
+            Event::PlanUpdated {
+                todos: vec![Todo {
+                    content: "Datei lesen".into(),
+                    status: TodoStatus::InProgress,
+                }],
+            },
+            Event::ToolArgsEdited {
+                call_id,
+                input: json!({"path": "y"}),
             },
             Event::RunFinished {
                 reason: FinishReason::LimitReached {

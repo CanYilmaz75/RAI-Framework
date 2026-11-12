@@ -35,7 +35,14 @@ pub struct Outcome {
 }
 
 pub(crate) enum Command {
-    Resolve { call_id: CallId, decision: Decision },
+    Resolve {
+        call_id: CallId,
+        decision: Decision,
+    },
+    ApproveEdited {
+        call_id: CallId,
+        input: serde_json::Value,
+    },
 }
 
 /// Steuerung eines Laufs, getrennt vom Event-Strom und frei kopierbar: so kann eine Stelle
@@ -51,6 +58,19 @@ impl RunController {
     pub async fn resolve(&self, call_id: CallId, decision: Decision) -> Result<(), RunError> {
         self.commands
             .send(Command::Resolve { call_id, decision })
+            .await
+            .map_err(|_| RunError::Closed)
+    }
+
+    /// Gibt den Aufruf frei, aber mit diesen Argumenten statt denen des Modells. Passen sie
+    /// nicht zum Schema des Tools, bleibt die Rückfrage offen.
+    pub async fn approve_with(
+        &self,
+        call_id: CallId,
+        input: serde_json::Value,
+    ) -> Result<(), RunError> {
+        self.commands
+            .send(Command::ApproveEdited { call_id, input })
             .await
             .map_err(|_| RunError::Closed)
     }
@@ -107,6 +127,15 @@ impl Run {
             .send(Command::Resolve { call_id, decision })
             .await
             .map_err(|_| RunError::Closed)
+    }
+
+    /// Gibt den Aufruf mit geänderten Argumenten frei; siehe [`RunController::approve_with`].
+    pub async fn approve_with(
+        &self,
+        call_id: CallId,
+        input: serde_json::Value,
+    ) -> Result<(), RunError> {
+        self.controller().approve_with(call_id, input).await
     }
 
     /// Steuerung, die unabhängig vom Handle weitergegeben werden kann.

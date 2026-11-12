@@ -10,6 +10,8 @@ pub mod redact;
 pub mod registry;
 pub mod run;
 pub mod step;
+mod step_plan;
+mod step_types;
 mod structured;
 pub mod subagent;
 

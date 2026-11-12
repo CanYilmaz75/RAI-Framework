@@ -18,6 +18,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+can-tools.workspace = true
 can-store = { workspace = true, features = ["sqlite"] }
 can-macros.workspace = true
 can-providers.workspace = true

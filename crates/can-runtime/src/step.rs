@@ -2,74 +2,15 @@
 
 use can_core::{
     Approver, CallId, CallStatus, Decision, Effect as ToolEffect, Event, FinishReason, LimitKind,
-    Message, Phase, ProviderError, Request, RunState, StopReason, Timestamp, ToolCall, ToolOutput,
-    Usage,
+    Message, Phase, ProviderError, RunState, StopReason, ToolCall, ToolOutput, Usage,
 };
 
+#[cfg(test)]
+use can_core::Timestamp;
+
+pub use crate::step_types::{Effect, Input, Step};
+
 use crate::context::{KEEP_ROUNDS, build_request, compaction_due, plan_compaction};
-
-/// Ergebnis eines Schritts: Events zum Speichern und Anwenden, Effekte zum Ausführen.
-#[derive(Debug, Default, PartialEq)]
-pub struct Step {
-    pub events: Vec<Event>,
-    pub effects: Vec<Effect>,
-}
-
-/// Was von außen in die Zustandsmaschine kommt. Jedes Effekt-Ergebnis ist ein `Input`.
-#[derive(Debug)]
-pub enum Input {
-    Start(Message),
-    /// Nach dem Falten eines gespeicherten Logs: der Zustand entscheidet, was fehlt.
-    Resume,
-    ModelDone {
-        message: Message,
-        usage: Usage,
-        stop: StopReason,
-    },
-    ModelFailed(ProviderError),
-    PolicyDecided {
-        call_id: CallId,
-        decision: Decision,
-        by: Approver,
-    },
-    /// Der Aufruf ist schon vor der Policy gescheitert: unbekanntes Tool oder ungültige Argumente.
-    ToolRejected {
-        call_id: CallId,
-        message: String,
-    },
-    ToolDone {
-        call_id: CallId,
-        output: ToolOutput,
-        is_error: bool,
-    },
-    /// Ein fataler Tool-Fehler beendet den Lauf.
-    ToolFatal {
-        call_id: CallId,
-        message: String,
-    },
-    /// Die Zusammenfassung des Verlaufs bis `up_to_seq` liegt vor.
-    Compacted {
-        up_to_seq: u64,
-        summary: Message,
-    },
-    /// Die Zusammenfassung ist gescheitert.
-    CompactFailed(String),
-    Cancel,
-    Tick(Timestamp),
-}
-
-/// Was der Treiber ausführen soll.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Effect {
-    CallModel(Request),
-    CheckPolicy(ToolCall),
-    RunTool(ToolCall),
-    /// Den Verlauf bis `up_to_seq` mit dieser Anfrage zusammenfassen lassen.
-    Compact {
-        up_to_seq: u64,
-        request: Request,
-    },
-}
 
 /// Entscheidet anhand von Zustand und Eingabe. Deterministisch und total: unpassende Eingaben
 /// ergeben einen leeren Schritt.
@@ -172,10 +113,16 @@ pub fn step(state: &RunState, input: Input) -> Step {
                 is_error,
             },
         ) if em.started(call_id) => {
-            em.emit(Event::ToolFinished {
+            em.tool_done(call_id, output, is_error);
+        }
+        (Phase::AwaitPolicy, Input::ApprovedWithEdit { call_id, input })
+            if em.unresolved(call_id) =>
+        {
+            em.emit(Event::ToolArgsEdited { call_id, input });
+            em.emit(Event::ApprovalResolved {
                 call_id,
-                output,
-                is_error,
+                decision: Decision::Allow,
+                by: Approver::Human,
             });
             em.advance();
         }
@@ -198,13 +145,13 @@ pub fn step(state: &RunState, input: Input) -> Step {
 }
 
 /// Sammelt Events und Effekte und führt dabei eine Arbeitskopie des Zustands mit.
-struct Emitter {
-    state: RunState,
-    out: Step,
+pub(crate) struct Emitter {
+    pub(crate) state: RunState,
+    pub(crate) out: Step,
 }
 
 impl Emitter {
-    fn emit(&mut self, event: Event) {
+    pub(crate) fn emit(&mut self, event: Event) {
         self.state.apply(&event);
         self.out.events.push(event);
     }
@@ -301,7 +248,7 @@ impl Emitter {
     /// Sobald alle Aufrufe entschieden sind: Tools in Modellreihenfolge starten, danach das
     /// Modell erneut fragen. Aufeinanderfolgende lesende Tools starten gemeinsam und laufen
     /// parallel; alles andere läuft einzeln. Solange ein Tool läuft, passiert nichts.
-    fn advance(&mut self) {
+    pub(crate) fn advance(&mut self) {
         if self.state.phase != Phase::RunTools {
             return;
         }
