@@ -328,23 +328,6 @@ impl Driver {
         }
     }
 
-    /// Kürzt eine zu große Ausgabe für das Modell. Die volle Ausgabe geht als Blob in den Store;
-    /// das Ergebnis nennt ihre Inhaltsadresse.
-    async fn shorten(&self, output: ToolOutput, max_bytes: usize) -> ToolOutput {
-        if exec::text_bytes(&output) <= max_bytes {
-            return output;
-        }
-        let full = self.agent.redactor.text(&output.as_text()).into_bytes();
-        let size = full.len();
-        let mut shortened = exec::truncate(output, max_bytes);
-        let note = match self.agent.store.put_blob(full).await {
-            Ok(digest) => format!("\n[Volle Ausgabe: {size} Bytes, im Store als Blob {digest}]"),
-            Err(error) => format!("\n[Volle Ausgabe: {size} Bytes, nicht gespeichert: {error}]"),
-        };
-        shortened.0.push(can_core::OutputBlock::Text(note));
-        shortened
-    }
-
     /// Das Arbeitsverzeichnis für Tools dieser Sitzung; bei getrennten Verzeichnissen wird es
     /// bei Bedarf angelegt.
     fn session_workdir(&self) -> std::io::Result<std::path::PathBuf> {

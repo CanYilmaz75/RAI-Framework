@@ -1,10 +1,11 @@
 //! Der Teil des Treibers, der mit dem Modell spricht: Antwort lesen, Abbrüche neu anfragen,
 //! alten Verlauf zusammenfassen lassen.
 
-use can_core::{Assembler, Chunk, Message, ProviderError, Request};
+use can_core::{Assembler, Chunk, Message, ProviderError, Request, ToolOutput};
 use futures::StreamExt;
 
 use crate::driver::Driver;
+use crate::exec;
 use crate::step::Input;
 
 /// So oft wird ein mittendrin abgebrochener Antwort-Strom neu angefragt.
@@ -79,5 +80,22 @@ impl Driver {
             },
             Err(error) => Input::CompactFailed(error.to_string()),
         }
+    }
+
+    /// Kürzt eine zu große Ausgabe für das Modell. Die volle Ausgabe geht als Blob in den Store;
+    /// das Ergebnis nennt ihre Inhaltsadresse.
+    pub(crate) async fn shorten(&self, output: ToolOutput, max_bytes: usize) -> ToolOutput {
+        if exec::text_bytes(&output) <= max_bytes {
+            return output;
+        }
+        let full = self.agent.redactor.text(&output.as_text()).into_bytes();
+        let size = full.len();
+        let mut shortened = exec::truncate(output, max_bytes);
+        let note = match self.agent.store.put_blob(full).await {
+            Ok(digest) => format!("\n[Volle Ausgabe: {size} Bytes, im Store als Blob {digest}]"),
+            Err(error) => format!("\n[Volle Ausgabe: {size} Bytes, nicht gespeichert: {error}]"),
+        };
+        shortened.0.push(can_core::OutputBlock::Text(note));
+        shortened
     }
 }
