@@ -6,6 +6,7 @@ pub mod http;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod read_file;
+pub mod sandbox;
 mod shell_tool;
 #[cfg(test)]
 pub(crate) mod testkit;
@@ -16,5 +17,6 @@ pub use http::HttpFetch;
 #[cfg(feature = "mcp")]
 pub use mcp::{McpClient, McpError};
 pub use read_file::ReadFile;
-pub use shell_tool::shell;
+pub use sandbox::{Sandbox, SandboxMode};
+pub use shell_tool::{SandboxedShell, shell};
 pub use write_tool::write_file;
