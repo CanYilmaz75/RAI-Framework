@@ -84,8 +84,9 @@ Health-Check unter `/healthz`. Alles unter `/v1` verlangt `Authorization: Bearer
 | `GET /v1/sessions/{id}/log` | gespeicherte Events als JSON |
 | `GET /v1/approvals` | offene Rückfragen des Mandanten |
 | `DELETE /v1/sessions/{id}` | Sitzung samt Log löschen (Rolle `admin`) |
+| `POST /v1/sessions/{id}/fork` | Sitzung ab einer Position verzweigen |
 | `GET /openapi.json` | Beschreibung der API |
-| `POST /v1/sessions/{id}/approvals/{call_id}` | Rückfrage mit `allow` oder `deny` beantworten |
+| `POST /v1/sessions/{id}/approvals/{call_id}` | Rückfrage mit `allow` oder `deny` beantworten; mit `input` laufen geänderte Argumente |
 | `POST /v1/sessions/{id}/cancel`, `.../resume` | Lauf abbrechen oder fortsetzen |
 
 - **Mandanten:** Jede Sitzung gehört einem Mandanten; fremde Sitzungen sehen aus wie nicht vorhanden.
@@ -260,6 +261,27 @@ Das Modell bekommt sie als Fehlerergebnis.
 
 `http_fetch` ruft nur Hosts der Freigabeliste ab. Private und lokale Adressen sind gesperrt, auch
 nach der DNS-Auflösung und nach jeder Weiterleitung.
+
+## Arbeit an Code
+
+Die CLI bringt dafür diese Tools mit; im Dienst wählt man sie pro Agent in der Konfiguration.
+
+| Tool | Wirkung |
+| --- | --- |
+| `ls`, `glob`, `grep` | Ordner auflisten, Dateien nach Muster finden (`src/**/*.rs`), Text suchen. `grep` sucht wörtlich, nicht mit regulären Ausdrücken. |
+| `read_file`, `write_file`, `edit_file` | lesen, neu schreiben, eine Textstelle ersetzen (sie muss genau einmal vorkommen) |
+| `write_todos` | Plan mit Aufgaben und Stand; jede Änderung steht als Event `PlanUpdated` im Log |
+| `load_skill` | lädt die Anleitung eines Skills |
+
+- **Gedächtnis:** Liegt im Arbeitsverzeichnis eine `AGENTS.md`, steht ihr Inhalt immer im System-Prompt.
+- **Skills:** Ordner unter `.can/skills/<name>/` mit einer `SKILL.md`, deren Kopf `name` und
+  `description` nennt. In den Prompt kommen nur diese beiden Angaben; den vollen Text holt das
+  Modell bei Bedarf.
+- **Freigabe mit Änderung:** Auf eine Rückfrage antwortet man mit `j`, `n` oder `e`. Mit `e`
+  gibt man neue Argumente als JSON ein; sie werden gegen das Schema geprüft, im Log
+  festgehalten, und das Modell erfährt, dass sie geändert wurden.
+- **Verzweigen:** `can fork <kennung> --at <position>` legt eine neue Sitzung an, die den Verlauf
+  bis zu dieser Position übernimmt. Die Positionen zeigt `can inspect`.
 
 ## Werkzeuge für den Betrieb
 

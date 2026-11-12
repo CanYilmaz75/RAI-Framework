@@ -2,6 +2,14 @@
 
 ## Unveröffentlicht
 
+### Arbeit an Code
+
+- Tools `ls`, `glob`, `grep`, `edit_file`
+- Planungs-Tool `write_todos`; der Plan steht als Event `PlanUpdated` im Log und im Zustand
+- Gedächtnis (`AGENTS.md`) immer im System-Prompt, Skills (`SKILL.md`) bei Bedarf über `load_skill`
+- Verzweigen: `Agent::fork`, `can fork`, `POST /v1/sessions/{id}/fork`
+- Freigabe mit geänderten Argumenten: `Run::approve_with`, Event `ToolArgsEdited`, in CLI und API
+
 ### Weiterer Ausbau
 
 - `Fallback`-Provider, Azure OpenAI, `Pricing`
