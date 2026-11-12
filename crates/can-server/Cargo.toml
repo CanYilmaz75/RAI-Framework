@@ -10,7 +10,7 @@ publish.workspace = true
 
 [dependencies]
 can-core.workspace = true
-can-providers = { workspace = true, features = ["openai", "anthropic"] }
+can-providers = { workspace = true, features = ["all"] }
 can-runtime.workspace = true
 can-store = { workspace = true, features = ["sqlite", "postgres"] }
 can-tools = { workspace = true, features = ["http", "mcp"] }

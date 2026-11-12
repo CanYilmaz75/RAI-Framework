@@ -17,7 +17,7 @@ steht unter „Dienst“ weiter unten.
 | Crate | Aufgabe |
 | --- | --- |
 | `can-core` | Typen (`Message`, `Event`, `RunState`), die Traits `Provider`, `Tool`, `Store`, `Policy`, `Clock`, dazu `RuleSet` und die Schema-Prüfung. Kein Netzwerk. |
-| `can-providers` | OpenAI-kompatibler Provider (Feature `openai`), Anthropic (Feature `anthropic`), `Retry`, `Recording`, `FakeProvider` |
+| `can-providers` | OpenAI-kompatibel (auch Azure, Ollama und weitere), Anthropic, Gemini, Vertex AI, Bedrock; `Retry`, `Fallback`, `Recording`, `FakeProvider` |
 | `can-runtime` | Schrittfunktion `step`, Treiber, `Agent`-Builder, Limits, Abbruch, Kompaktierung, parallele Tools, `SubAgent` |
 | `can-tools` | `read_file`, `write_file`, `shell`, `http_fetch` (Feature `http`), MCP-Client (Feature `mcp`) |
 | `can-store` | `MemoryStore`, `SqliteStore` (Feature `sqlite`) und `PostgresStore` (Feature `postgres`), mit Blobs und Sitzungssperre |
@@ -119,6 +119,26 @@ Was dem Dienst noch fehlt: Anmeldung über SSO, ein Netzwerk-Proxy für ausgehen
 ein Schlüssel pro Mandant, TLS zur Datenbank und ein Verbindungspool. Token- und Kostenbudget zählen pro
 Prozess und beginnt nach einem Neustart bei null. Die Docker-Sandbox ist geschrieben, aber
 mangels Docker in der Entwicklungsumgebung nicht ausgeführt worden.
+
+## Anbieter
+
+| `kind` | Anbieter | Was zusätzlich nötig ist |
+| --- | --- | --- |
+| `openai` (Vorgabe) | OpenAI oder jede kompatible Adresse über `base_url` | `OPENAI_API_KEY` |
+| `anthropic` | Anthropic API | `ANTHROPIC_API_KEY` |
+| `azure` | Azure OpenAI | `base_url`, `deployment`, `AZURE_OPENAI_API_KEY` |
+| `gemini` | Gemini API | `GEMINI_API_KEY` |
+| `vertex` | Gemini auf Vertex AI | `project`, `location`; Token aus `GOOGLE_CLOUD_ACCESS_TOKEN` oder `gcloud auth print-access-token` |
+| `vertex_anthropic` | Claude auf Vertex AI | wie `vertex` |
+| `bedrock` | Amazon Bedrock (Converse-API) | `region`, Bedrock-API-Schlüssel in `AWS_BEARER_TOKEN_BEDROCK` |
+| `ollama`, `openrouter`, `groq`, `mistral`, `deepseek`, `xai`, `together`, `fireworks`, `perplexity` | OpenAI-kompatible Anbieter mit fester Adresse | der Schlüssel des Anbieters, etwa `GROQ_API_KEY`; Ollama braucht keinen |
+
+```bash
+cargo run -p can-cli -- chat --provider groq --model llama-3.3-70b-versatile "Hallo"
+```
+
+Bedrock liefert die Antwort am Stück statt gestreamt. Gemini-Modelle senden zu Tool-Aufrufen eine
+Signatur, die Can bei der nächsten Anfrage unverändert zurückgibt.
 
 ## Konfigurationsdatei
 

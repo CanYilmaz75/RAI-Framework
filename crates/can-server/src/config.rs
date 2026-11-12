@@ -73,6 +73,18 @@ pub struct AgentConfig {
     pub provider: String,
     pub base_url: Option<String>,
     pub api_key_env: Option<String>,
+    /// AWS-Region für `bedrock`.
+    pub region: Option<String>,
+    /// Google-Cloud-Projekt und -Region für `vertex` und `vertex_anthropic`.
+    pub project: Option<String>,
+    pub location: Option<String>,
+    /// Deployment und API-Version für `azure`.
+    pub deployment: Option<String>,
+    pub api_version: Option<String>,
+    /// Zugangstoken für Vertex: Variable oder Programm, das es ausgibt.
+    pub token_env: Option<String>,
+    #[serde(default)]
+    pub token_command: Vec<String>,
     /// Aus `read_file`, `write_file`, `edit_file`, `ls`, `glob`, `grep`, `write_todos`, `shell`,
     /// `http_fetch`.
     #[serde(default)]
@@ -156,12 +168,10 @@ impl ServerConfig {
             if !names.insert(&agent.name) {
                 return Err(invalid(format!("Agent {} doppelt", agent.name)));
             }
-            if !matches!(agent.provider.as_str(), "" | "openai" | "anthropic") {
-                return Err(invalid(format!(
-                    "Agent {}: unbekannter Provider {}",
-                    agent.name, agent.provider
-                )));
-            }
+            agent
+                .provider_settings()
+                .validate()
+                .map_err(|error| invalid(format!("Agent {}: {error}", agent.name)))?;
             for tool in &agent.tools {
                 if !matches!(
                     tool.as_str(),
@@ -231,7 +241,7 @@ impl ServerConfig {
             names.push(url_env.clone());
         }
         for agent in &self.agents {
-            names.extend(agent.api_key_env.iter().cloned());
+            names.extend(agent.provider_settings().secret_names());
             names.extend(
                 agent
                     .mcp

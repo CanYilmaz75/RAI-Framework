@@ -7,7 +7,7 @@ use can_core::{
     BlockList, Limits, Provider, RuleSet, Secret, Store, Tool, ToolCtx, ToolError, ToolOutput,
     ToolSpec,
 };
-use can_providers::{Anthropic, OpenAiCompat, Retry};
+use can_providers::{ProviderSettings, Retry};
 use can_runtime::{Agent, SystemClock};
 use can_tools::mcp::HttpTransport;
 use can_tools::{
@@ -35,30 +35,31 @@ impl Tool for Confidential {
 }
 
 impl AgentConfig {
+    /// Die Anbieter-Einstellungen dieses Agenten.
+    pub(crate) fn provider_settings(&self) -> ProviderSettings {
+        ProviderSettings {
+            kind: self.provider.clone(),
+            base_url: self.base_url.clone(),
+            api_key_env: self.api_key_env.clone(),
+            region: self.region.clone(),
+            project: self.project.clone(),
+            location: self.location.clone(),
+            deployment: self.deployment.clone(),
+            api_version: self.api_version.clone(),
+            token_env: self.token_env.clone(),
+            token_command: self.token_command.clone(),
+        }
+    }
+
     fn provider(
         &self,
         lookup: &impl Fn(&str) -> Option<String>,
     ) -> Result<Arc<dyn Provider>, ConfigError> {
-        let source = |name: &str| {
-            if name.ends_with("BASE_URL") && self.base_url.is_some() {
-                return self.base_url.clone();
-            }
-            match &self.api_key_env {
-                Some(variable) if name.ends_with("API_KEY") => lookup(variable),
-                _ => lookup(name),
-            }
-        };
-        let clock = Arc::new(SystemClock);
-        Ok(match self.provider.as_str() {
-            "anthropic" => Arc::new(Retry::new(
-                Anthropic::from_lookup(source).map_err(invalid)?,
-                clock,
-            )),
-            _ => Arc::new(Retry::new(
-                OpenAiCompat::from_lookup(source).map_err(invalid)?,
-                clock,
-            )),
-        })
+        let provider = self
+            .provider_settings()
+            .build(lookup)
+            .map_err(|error| invalid(format!("Agent {}: {error}", self.name)))?;
+        Ok(Arc::new(Retry::new(provider, Arc::new(SystemClock))))
     }
 
     pub(crate) async fn build(

@@ -4,7 +4,6 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use can_cli::config::ProviderKind;
 use can_cli::eval::{Suite, run_suite};
 use can_cli::inspect::inspect;
 use can_cli::{
@@ -40,9 +39,10 @@ struct Common {
     /// Basis-URL der OpenAI-kompatiblen API.
     #[arg(long, env = "CAN_BASE_URL")]
     base_url: Option<String>,
-    /// Anbieter der API: openai (auch Ollama und andere kompatible) oder anthropic.
+    /// Anbieter: openai, anthropic, azure, gemini, vertex, vertex_anthropic, bedrock oder eine
+    /// OpenAI-kompatible Voreinstellung wie ollama, openrouter, groq, mistral, deepseek, xai.
     #[arg(long, env = "CAN_PROVIDER")]
-    provider: Option<ProviderKind>,
+    provider: Option<String>,
     /// Konfigurationsdatei; ohne Angabe gilt can.toml im aktuellen Verzeichnis, falls vorhanden.
     #[arg(long)]
     config: Option<PathBuf>,

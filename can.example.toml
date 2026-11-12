@@ -7,7 +7,11 @@ system = "Du bist ein hilfreicher Assistent."
 # db = "can.db"
 
 [provider]
-kind = "openai"                      # oder "anthropic"
+kind = "openai"                      # anthropic, azure, gemini, vertex, vertex_anthropic, bedrock,
+                                     # ollama, openrouter, groq, mistral, deepseek, xai, together …
+# region = "eu-central-1"            # bedrock
+# project = "mein-projekt"           # vertex, vertex_anthropic
+# location = "europe-west4"
 # base_url = "http://localhost:11434/v1"
 # api_key_env = "MEIN_SCHLUESSEL"
 

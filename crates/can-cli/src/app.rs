@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use can_core::{MemoryStore, Provider, RuleSet, Store};
-use can_providers::{Anthropic, FakeProvider, OpenAiCompat, Recording, Retry};
+use can_providers::{FakeProvider, Recording, Retry};
 use can_runtime::{Agent, SystemClock};
 use can_store::SqliteStore;
 use can_tools::{
@@ -13,7 +13,7 @@ use can_tools::{
 };
 
 use crate::CliError;
-use crate::config::{Config, ProviderKind};
+use crate::config::Config;
 
 /// Vorgabe für den System-Prompt.
 pub const DEFAULT_SYSTEM: &str = "Du bist ein hilfreicher Assistent. Nutze die Tools, um Dateien zu finden, zu lesen und zu ändern oder Programme zu starten. Halte bei mehrstufigen Aufgaben einen Plan mit write_todos.";
@@ -27,7 +27,8 @@ pub struct Options {
     pub workdir: Option<PathBuf>,
     /// Basis-URL der API; ohne Angabe gelten Konfiguration und Umgebungsvariablen.
     pub base_url: Option<String>,
-    pub provider: Option<ProviderKind>,
+    /// Anbieter, etwa `anthropic`, `gemini`, `bedrock` oder `ollama`.
+    pub provider: Option<String>,
     /// SQLite-Datei für Sitzungen; ohne Angabe bleibt alles im Arbeitsspeicher.
     pub db: Option<PathBuf>,
     /// Datei, in die die Modellantworten für ein späteres Replay geschrieben werden.
@@ -44,7 +45,8 @@ pub struct App {
 }
 
 /// Wiederholungen innen, Aufzeichnung außen: aufgezeichnet wird nur, was der Lauf auch sieht.
-fn decorate<P: Provider + 'static>(provider: P, record: &Option<PathBuf>) -> Arc<dyn Provider> {
+/// Wiederholungen innen, Aufzeichnung außen: aufgezeichnet wird nur, was der Lauf auch sieht.
+fn decorate(provider: Arc<dyn Provider>, record: &Option<PathBuf>) -> Arc<dyn Provider> {
     let retrying = Retry::new(provider, Arc::new(SystemClock));
     match record {
         Some(path) => Arc::new(Recording::new(retrying, path.clone())),
@@ -56,22 +58,15 @@ fn provider(options: &Options) -> Result<Arc<dyn Provider>, CliError> {
     if let Some(path) = &options.replay {
         return Ok(Arc::new(FakeProvider::from_recording(path)?));
     }
-    let config = &options.config.provider;
-    let base_url = options.base_url.clone().or_else(|| config.base_url.clone());
-    // Basis-URL und Schlüsselquelle aus Optionen und Datei überlagern die Umgebungsvariablen.
-    let lookup = |name: &str| {
-        if name.ends_with("BASE_URL") && base_url.is_some() {
-            return base_url.clone();
-        }
-        match &config.api_key_env {
-            Some(variable) if name.ends_with("API_KEY") => std::env::var(variable).ok(),
-            _ => std::env::var(name).ok(),
-        }
-    };
-    Ok(match options.provider.unwrap_or(config.kind) {
-        ProviderKind::Openai => decorate(OpenAiCompat::from_lookup(lookup)?, &options.record),
-        ProviderKind::Anthropic => decorate(Anthropic::from_lookup(lookup)?, &options.record),
-    })
+    let mut settings = options.config.provider.clone();
+    if let Some(kind) = &options.provider {
+        settings.kind = kind.clone();
+    }
+    if options.base_url.is_some() {
+        settings.base_url = options.base_url.clone();
+    }
+    let lookup = |name: &str| std::env::var(name).ok();
+    Ok(decorate(settings.build(&lookup)?, &options.record))
 }
 
 /// Öffnet den Store der Sitzungen: die SQLite-Datei aus Optionen oder Konfiguration, sonst den

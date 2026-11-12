@@ -245,3 +245,53 @@ async fn coding_tools_memory_and_skills_come_from_the_config() {
     assert!(system.contains("- release: Versionen") && !system.contains("Erst testen."));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn every_provider_kind_is_configurable() {
+    let text = r#"
+[[agents]]
+name = "claude-vertex"
+model = "claude-sonnet"
+provider = "vertex_anthropic"
+project = "mein-projekt"
+location = "europe-west1"
+token_env = "VERTEX_TOKEN"
+
+[[agents]]
+name = "bedrock"
+model = "anthropic.claude-v2"
+provider = "bedrock"
+region = "eu-central-1"
+api_key_env = "BEDROCK_KEY"
+
+[[agents]]
+name = "lokal"
+model = "llama3"
+provider = "ollama"
+"#;
+    let config = ServerConfig::parse(text).unwrap();
+    let names = config.secret_names();
+    assert!(
+        names.contains(&"VERTEX_TOKEN".to_owned()) && names.contains(&"BEDROCK_KEY".to_owned())
+    );
+    let lookup =
+        |name: &str| matches!(name, "VERTEX_TOKEN" | "BEDROCK_KEY").then(|| "geheim".to_owned());
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    assert_eq!(config.agents(&store, lookup).await.unwrap().len(), 3);
+
+    let unknown =
+        ServerConfig::parse("[[agents]]\nname = \"x\"\nmodel = \"m\"\nprovider = \"gpt\"");
+    assert!(unknown.unwrap_err().to_string().contains("erlaubt"));
+    let incomplete =
+        ServerConfig::parse("[[agents]]\nname = \"x\"\nmodel = \"m\"\nprovider = \"bedrock\"")
+            .unwrap();
+    assert!(
+        incomplete
+            .agents(&store, lookup)
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("region")
+    );
+}

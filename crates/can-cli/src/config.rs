@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use can_core::{Limits, Rule};
+use can_providers::ProviderSettings;
 use serde::Deserialize;
 
 use crate::CliError;
@@ -19,7 +20,7 @@ pub struct Config {
     pub workdir: Option<PathBuf>,
     pub db: Option<PathBuf>,
     #[serde(default)]
-    pub provider: ProviderConfig,
+    pub provider: ProviderSettings,
     #[serde(default)]
     pub limits: LimitsConfig,
     #[serde(default)]
@@ -28,39 +29,6 @@ pub struct Config {
     pub http: HttpConfig,
     #[serde(default)]
     pub mcp: McpConfig,
-}
-
-/// Welche API angesprochen wird.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderKind {
-    #[default]
-    Openai,
-    Anthropic,
-}
-
-impl std::str::FromStr for ProviderKind {
-    type Err = String;
-
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        match text {
-            "openai" => Ok(Self::Openai),
-            "anthropic" => Ok(Self::Anthropic),
-            other => Err(format!(
-                "unbekannter Provider {other}; erlaubt: openai, anthropic"
-            )),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct ProviderConfig {
-    #[serde(default)]
-    pub kind: ProviderKind,
-    pub base_url: Option<String>,
-    /// Name der Umgebungsvariablen mit dem Schlüssel.
-    pub api_key_env: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -128,6 +96,10 @@ impl Config {
     pub fn parse(text: &str) -> Result<Self, CliError> {
         let config: Self = toml::from_str(text)
             .map_err(|error| CliError::Config(format!("Konfiguration ungültig: {error}")))?;
+        config
+            .provider
+            .validate()
+            .map_err(|error| CliError::Config(error.to_string()))?;
         for (name, server) in &config.mcp.servers {
             if server.command.is_some() == server.url.is_some() {
                 return Err(CliError::Config(format!(
@@ -202,7 +174,7 @@ url = "http://localhost:8080/mcp"
     fn full_file_parses() {
         let config = Config::parse(FULL).unwrap();
         assert_eq!(config.model.as_deref(), Some("mein-modell"));
-        assert_eq!(config.provider.kind, ProviderKind::Anthropic);
+        assert_eq!(config.provider.kind(), "anthropic");
         assert_eq!(
             config.provider.api_key_env.as_deref(),
             Some("MEIN_SCHLUESSEL")
@@ -245,7 +217,7 @@ url = "http://localhost:8080/mcp"
     fn empty_file_is_all_defaults() {
         let config = Config::parse("").unwrap();
         assert_eq!(config, Config::default());
-        assert_eq!(config.provider.kind, ProviderKind::Openai);
+        assert_eq!(config.provider.kind(), "openai");
         assert_eq!(config.limits.limits(), Limits::default());
     }
 
@@ -254,7 +226,13 @@ url = "http://localhost:8080/mcp"
         let secret = Config::parse("[provider]\napi_key = \"sk-geheim\"").unwrap_err();
         assert!(secret.to_string().contains("api_key"), "{secret}");
         assert!(Config::parse("modell = \"x\"").is_err());
-        assert!(Config::parse("[provider]\nkind = \"gemini\"").is_err());
+        assert!(
+            Config::parse("[provider]\nkind = \"gpt\"")
+                .unwrap_err()
+                .to_string()
+                .contains("erlaubt")
+        );
+        assert!(Config::parse("[provider]\nkind = \"bedrock\"\nregion = \"eu-central-1\"").is_ok());
         assert!(Config::parse("model = ").is_err());
     }
 
@@ -292,10 +270,5 @@ url = "http://localhost:8080/mcp"
                 .to_string()
                 .contains("nicht lesbar")
         );
-        assert_eq!(
-            "anthropic".parse::<ProviderKind>(),
-            Ok(ProviderKind::Anthropic)
-        );
-        assert!("x".parse::<ProviderKind>().is_err());
     }
 }

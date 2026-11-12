@@ -2,8 +2,8 @@
 //! der Teil mit Stabilitätsversprechen; die internen Crates bleiben austauschbar.
 //!
 //! Ohne Feature-Flags baut nur der Kern mit `MemoryStore` und `FakeProvider`. Die Flags
-//! `openai`, `anthropic`, `sqlite`, `postgres`, `http` und `mcp` schalten Anbieter, Stores und
-//! Tools dazu.
+//! `openai`, `anthropic`, `gemini`, `vertex`, `bedrock` (oder alle mit `providers`), `sqlite`,
+//! `postgres`, `http` und `mcp` schalten Anbieter, Stores und Tools dazu.
 //!
 //! ```
 //! use can::prelude::*;
@@ -48,8 +48,16 @@ pub mod prelude {
 
     #[cfg(feature = "anthropic")]
     pub use can_providers::Anthropic;
+    #[cfg(feature = "bedrock")]
+    pub use can_providers::Bedrock;
+    #[cfg(feature = "gemini")]
+    pub use can_providers::Gemini;
     #[cfg(feature = "openai")]
     pub use can_providers::OpenAiCompat;
+    #[cfg(feature = "providers")]
+    pub use can_providers::ProviderSettings;
+    #[cfg(feature = "vertex")]
+    pub use can_providers::VertexAnthropic;
     #[cfg(feature = "postgres")]
     pub use can_store::PostgresStore;
     #[cfg(feature = "sqlite")]

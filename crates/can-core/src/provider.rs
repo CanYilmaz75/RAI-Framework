@@ -112,6 +112,19 @@ pub trait Provider: Send + Sync {
     async fn stream(&self, req: Request) -> Result<ProviderStream, ProviderError>;
 }
 
+/// Ein geteilter Provider ist selbst ein Provider; so lassen sich Dekoratoren wie `Retry` auch
+/// um einen zur Laufzeit gewählten Anbieter legen.
+#[async_trait]
+impl<P: Provider + ?Sized> Provider for std::sync::Arc<P> {
+    fn capabilities(&self, model: &str) -> Capabilities {
+        (**self).capabilities(model)
+    }
+
+    async fn stream(&self, req: Request) -> Result<ProviderStream, ProviderError> {
+        (**self).stream(req).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
