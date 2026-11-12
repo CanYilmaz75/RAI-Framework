@@ -1,7 +1,8 @@
 # Can
 
 Can ist ein eigenständiges AI-Agent-Framework in Rust: ein Cargo-Workspace ohne fremde
-Agent-Frameworks.
+Agent-Frameworks. Es ist für alle drei Einsatzarten gedacht: als Terminal-Werkzeug (`can`), als
+Dienst für viele Nutzer (`can-server`) und eingebettet in andere Programme (Crate `can`).
 
 Der Kern ist eine reine Schrittfunktion ohne Ein- und Ausgabe. Alles, was in einem Lauf passiert,
 ist ein Event; der Zustand entsteht nur durch Falten der Event-Folge. Jeder Tool-Aufruf läuft
@@ -318,3 +319,7 @@ Das Skript führt `cargo fmt --check`, `cargo clippy -D warnings`, alle Tests un
 Kein Test ruft eine echte Modell-API auf; Provider, MCP und HTTP laufen gegen lokale Server.
 Die PostgreSQL-Tests laufen nur, wenn `CAN_TEST_POSTGRES_URL` auf eine Datenbank zeigt; in der CI
 ist das der Fall.
+
+## Lizenz
+
+MIT, siehe [`LICENSE`](LICENSE).
