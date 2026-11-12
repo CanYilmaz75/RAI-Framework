@@ -1,0 +1,49 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Can", "version": "0.1.0", "description": "HTTP-API des Agent-Dienstes. Alles unter /v1 verlangt Authorization: Bearer <schlüssel>." },
+  "components": {
+    "securitySchemes": { "apiKey": { "type": "http", "scheme": "bearer" } },
+    "schemas": {
+      "Error": { "type": "object", "properties": { "error": { "type": "string" } }, "required": ["error"] },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" }, "tenant": { "type": "string" }, "user": { "type": "string" }, "agent": { "type": "string" },
+          "created_at": { "type": "integer" }, "status": { "enum": ["running", "idle", "stopped"] },
+          "idempotency_key": { "type": ["string", "null"] }
+        }
+      },
+      "Approval": {
+        "type": "object",
+        "properties": { "session_id": { "type": "string" }, "call_id": { "type": "string" }, "tool": { "type": "string" }, "input": {} }
+      }
+    }
+  },
+  "security": [{ "apiKey": [] }],
+  "paths": {
+    "/healthz": { "get": { "summary": "Lebt der Dienst?", "security": [], "responses": { "200": { "description": "ok" } } } },
+    "/metrics": { "get": { "summary": "Kennzahlen im Prometheus-Format", "security": [], "responses": { "200": { "description": "Text" } } } },
+    "/v1/agents": { "get": { "summary": "Namen der Agenten", "responses": { "200": { "description": "Liste" } } } },
+    "/v1/sessions": {
+      "get": { "summary": "Sitzungen des Mandanten, neueste zuerst", "responses": { "200": { "description": "Liste" } } },
+      "post": {
+        "summary": "Sitzung anlegen und Lauf starten",
+        "parameters": [{ "name": "Idempotency-Key", "in": "header", "schema": { "type": "string" }, "description": "Ein doppelter Aufruf mit demselben Schlüssel startet keinen zweiten Lauf." }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "agent": { "type": "string" }, "input": { "type": "string" } }, "required": ["agent", "input"] } } } },
+        "responses": { "201": { "description": "angelegt" }, "200": { "description": "gab es schon (Idempotenz)" }, "403": { "description": "Rolle reicht nicht" }, "404": { "description": "unbekannter Agent" }, "429": { "description": "Kontingent erschöpft" } }
+      }
+    },
+    "/v1/sessions/{id}": {
+      "get": { "summary": "Sitzung samt offenen Rückfragen", "responses": { "200": { "description": "Sitzung" }, "404": { "description": "nicht gefunden" } } },
+      "delete": { "summary": "Sitzung samt Log löschen (Rolle admin)", "responses": { "204": { "description": "gelöscht" }, "409": { "description": "Lauf noch unterwegs" } } }
+    },
+    "/v1/sessions/{id}/messages": { "post": { "summary": "Nächste Nachricht in derselben Sitzung", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "input": { "type": "string" } }, "required": ["input"] } } } }, "responses": { "202": { "description": "Lauf gestartet" }, "409": { "description": "Lauf noch unterwegs" } } } },
+    "/v1/sessions/{id}/events": { "get": { "summary": "Event-Strom (Server-Sent Events)", "parameters": [{ "name": "after", "in": "query", "schema": { "type": "integer" }, "description": "Nur Events nach dieser Position; alternativ der Header Last-Event-ID." }], "responses": { "200": { "description": "text/event-stream" } } } },
+    "/v1/sessions/{id}/log": { "get": { "summary": "Gespeicherte Events als JSON", "parameters": [{ "name": "after", "in": "query", "schema": { "type": "integer" } }], "responses": { "200": { "description": "Events" } } } },
+    "/v1/sessions/{id}/verify": { "get": { "summary": "Hash-Kette des Logs prüfen (Rolle admin)", "responses": { "200": { "description": "intact und first_broken_seq" } } } },
+    "/v1/sessions/{id}/cancel": { "post": { "summary": "Lauf abbrechen", "responses": { "202": { "description": "Abbruch angefordert" }, "409": { "description": "kein Lauf unterwegs" } } } },
+    "/v1/sessions/{id}/resume": { "post": { "summary": "Unterbrochenen Lauf fortsetzen", "responses": { "202": { "description": "fortgesetzt" }, "409": { "description": "nichts fortzusetzen" } } } },
+    "/v1/sessions/{id}/approvals/{call_id}": { "post": { "summary": "Rückfrage beantworten", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "decision": { "enum": ["allow", "deny"] } }, "required": ["decision"] } } } }, "responses": { "204": { "description": "beantwortet" }, "404": { "description": "nicht (mehr) offen" } } } },
+    "/v1/approvals": { "get": { "summary": "Offene Rückfragen des Mandanten", "responses": { "200": { "description": "Liste" } } } }
+  }
+}

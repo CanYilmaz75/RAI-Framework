@@ -36,6 +36,15 @@ pub struct App {
 pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/", get(|| async { Html(include_str!("ui.html")) }))
+        .route(
+            "/openapi.json",
+            get(|| async {
+                (
+                    [("content-type", "application/json")],
+                    include_str!("openapi.json"),
+                )
+            }),
+        )
         .route("/healthz", get(api::healthz))
         .route("/metrics", get(api::metrics))
         .route("/v1/agents", get(api::list_agents))

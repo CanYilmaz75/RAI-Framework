@@ -9,6 +9,7 @@ rust-version = "1.88"
 publish = false
 
 [workspace.dependencies]
+can = { path = "crates/can" }
 can-core = { path = "crates/can-core" }
 can-providers = { path = "crates/can-providers" }
 can-macros = { path = "crates/can-macros" }
