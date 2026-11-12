@@ -25,7 +25,9 @@ pub use event::{
     Timestamp, ToolCall,
 };
 pub use ids::{CallId, IdError, RunId, SessionId};
-pub use message::{Bytes, ContentBlock, Message, OutputBlock, Role, StopReason, ToolOutput, Usage};
+pub use message::{
+    Bytes, ContentBlock, Message, OutputBlock, Pricing, Role, StopReason, ToolOutput, Usage,
+};
 pub use moderation::{BlockList, Moderator};
 pub use policy::{AllowAll, ByEffect, DenyAll, Policy};
 pub use provider::{

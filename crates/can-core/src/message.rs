@@ -200,6 +200,32 @@ impl Usage {
     }
 }
 
+/// Preise eines Modells je Million Token, in einer frei gewählten Währung. Das Framework
+/// enthält keine fest einkodierten Preise.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pricing {
+    #[serde(default)]
+    pub input_per_million: f64,
+    #[serde(default)]
+    pub output_per_million: f64,
+    /// Preis für Eingabe-Token aus dem Cache; ohne Angabe gilt der Eingabepreis.
+    pub cached_per_million: Option<f64>,
+}
+
+impl Pricing {
+    /// Kosten eines Verbrauchs.
+    pub fn cost(&self, usage: Usage) -> f64 {
+        let cached = usage.cached_tokens.min(usage.input_tokens);
+        let fresh = usage.input_tokens - cached;
+        let cached_price = self.cached_per_million.unwrap_or(self.input_per_million);
+        (fresh as f64 * self.input_per_million
+            + cached as f64 * cached_price
+            + usage.output_tokens as f64 * self.output_per_million)
+            / 1_000_000.0
+    }
+}
+
 /// Grund, aus dem das Modell seine Antwort beendet hat.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -304,6 +330,30 @@ mod tests {
             serde_json::to_string(&Bytes(vec![10, 171])).unwrap(),
             "\"0aab\""
         );
+    }
+
+    #[test]
+    fn pricing_turns_usage_into_cost() {
+        let pricing = Pricing {
+            input_per_million: 3.0,
+            output_per_million: 15.0,
+            cached_per_million: Some(0.3),
+        };
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            output_tokens: 200_000,
+            cached_tokens: 400_000,
+        };
+        assert!((pricing.cost(usage) - (0.6 * 3.0 + 0.4 * 0.3 + 0.2 * 15.0)).abs() < 1e-9);
+        let flat = Pricing {
+            input_per_million: 2.0,
+            ..Pricing::default()
+        };
+        assert!(
+            (flat.cost(usage) - 2.0).abs() < 1e-9,
+            "ohne Cache-Preis gilt der Eingabepreis"
+        );
+        assert_eq!(Pricing::default().cost(usage), 0.0);
     }
 
     #[test]

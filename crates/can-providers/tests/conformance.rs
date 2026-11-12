@@ -211,3 +211,17 @@ async fn anthropic_provider_conforms() {
     };
     conformance(build, ANTHROPIC_STREAM, "/v1/messages", "x-api-key: geheim").await;
 }
+
+#[tokio::test]
+async fn azure_openai_conforms_with_its_own_address_and_header() {
+    let build = |base: String| -> Box<dyn Provider> {
+        Box::new(OpenAiCompat::azure(
+            &base,
+            "mein-deployment",
+            "2024-10-21",
+            Secret::new("geheim".to_owned()),
+        ))
+    };
+    let path = "/openai/deployments/mein-deployment/chat/completions?api-version=2024-10-21";
+    conformance(build, OPENAI_STREAM, path, "api-key: geheim").await;
+}

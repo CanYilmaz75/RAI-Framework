@@ -15,6 +15,8 @@ pub struct OpenAiCompat {
     base_url: String,
     api_key: Option<Secret<String>>,
     capabilities: Capabilities,
+    /// Azure OpenAI: vollständige Adresse des Deployments; der Schlüssel geht im Header `api-key`.
+    azure_url: Option<String>,
 }
 
 impl OpenAiCompat {
@@ -32,6 +34,7 @@ impl OpenAiCompat {
                 context_window: 128_000,
                 max_output: 4_096,
             },
+            azure_url: None,
         }
     }
 
@@ -60,6 +63,23 @@ impl OpenAiCompat {
         Ok(Self::new(base_url, api_key))
     }
 
+    /// Provider für ein Deployment bei Azure OpenAI. `endpoint` hat die Form
+    /// `https://<ressource>.openai.azure.com`.
+    pub fn azure(
+        endpoint: &str,
+        deployment: &str,
+        api_version: &str,
+        api_key: Secret<String>,
+    ) -> Self {
+        let endpoint = endpoint.trim_end_matches('/');
+        let url = format!(
+            "{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        );
+        let mut provider = Self::new(endpoint, Some(api_key));
+        provider.azure_url = Some(url);
+        provider
+    }
+
     /// Setzt die Fähigkeiten, die für alle Modelle dieses Endpunkts gemeldet werden.
     pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
         self.capabilities = capabilities;
@@ -83,12 +103,19 @@ impl Provider for OpenAiCompat {
             .map_err(|error| ProviderError::InvalidRequest(error.to_string()))?;
         let mut builder = self
             .client
-            .post(format!("{}/chat/completions", self.base_url))
+            .post(
+                self.azure_url
+                    .clone()
+                    .unwrap_or_else(|| format!("{}/chat/completions", self.base_url)),
+            )
             .header("content-type", "application/json")
             .header("accept", "text/event-stream")
             .body(body);
         if let Some(key) = &self.api_key {
-            builder = builder.bearer_auth(key.expose());
+            builder = match self.azure_url {
+                Some(_) => builder.header("api-key", key.expose()),
+                None => builder.bearer_auth(key.expose()),
+            };
         }
         Ok(decode::decode_body(crate::http::send(builder).await?))
     }
