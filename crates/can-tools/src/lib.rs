@@ -14,6 +14,8 @@ pub mod skills;
 #[cfg(test)]
 pub(crate) mod testkit;
 pub mod todos;
+#[cfg(feature = "wasm")]
+pub mod wasm;
 mod write_tool;
 
 pub use edit::edit_file;
@@ -27,4 +29,6 @@ pub use search::{glob, grep, ls};
 pub use shell_tool::{SandboxedShell, shell};
 pub use skills::{LoadSkill, SkillSet, load_memory, system_prompt};
 pub use todos::WriteTodos;
+#[cfg(feature = "wasm")]
+pub use wasm::{FileAccess, WasmTool, WasmToolConfig};
 pub use write_tool::write_file;

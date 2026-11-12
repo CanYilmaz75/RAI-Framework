@@ -126,7 +126,8 @@ impl HttpFetch {
         Ok((host, address))
     }
 
-    async fn fetch(&self, start: &str) -> Result<String, ToolError> {
+    /// Ruft die Adresse ab: Freigabeliste, Sperre privater Adressen und Weiterleitungen inklusive.
+    pub async fn fetch(&self, start: &str) -> Result<String, ToolError> {
         let mut url =
             Url::parse(start).map_err(|error| for_model(format!("Ungültige Adresse: {error}")))?;
         for _ in 0..=MAX_REDIRECTS {

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["wasm/demo-tool"]
 
 [workspace.package]
 version = "0.1.0"
@@ -38,6 +39,8 @@ tokio-util = "0.7"
 toml = "1"
 tracing = "0.1"
 ulid = { version = "1", features = ["serde"] }
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "runtime", "std", "wat", "parallel-compilation"] }
+wasmtime-wasi = { version = "50", default-features = false, features = ["p1"] }
 
 proc-macro2 = "1"
 quote = "1"
@@ -52,3 +55,10 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+# Abhängigkeiten ohne Debug-Informationen: hält Testprogramme mit wasmtime klein.
+[profile.dev.package."*"]
+debug = false
+
+[profile.dev]
+debug = "line-tables-only"

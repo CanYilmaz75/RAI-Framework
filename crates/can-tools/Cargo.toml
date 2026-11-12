@@ -11,12 +11,15 @@ publish.workspace = true
 [features]
 default = []
 http = ["dep:reqwest", "dep:futures", "tokio/net"]
+wasm = ["http", "dep:wasmtime", "dep:wasmtime-wasi", "tokio/rt"]
 mcp = ["dep:reqwest", "dep:thiserror", "tokio/io-util", "tokio/sync"]
 
 [dependencies]
 futures = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
+wasmtime = { workspace = true, optional = true }
+wasmtime-wasi = { workspace = true, optional = true }
 can-core.workspace = true
 can-macros.workspace = true
 async-trait.workspace = true
