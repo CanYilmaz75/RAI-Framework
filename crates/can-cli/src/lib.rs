@@ -9,9 +9,10 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
+use can_core::schema::validate;
 use can_core::{
     Bytes, CallId, ContentBlock, Decision, Event, Message, ProviderError, Role, SessionId,
-    StoreError, ToolCall,
+    StoreError, TodoStatus, ToolCall, ToolSpec,
 };
 use can_runtime::{BuildError, Outcome, Run, RunError};
 use can_tools::McpError;
@@ -76,7 +77,7 @@ pub fn user_message(text: &str, images: &[impl AsRef<Path>]) -> Result<Message, 
 pub struct Terminal<'a> {
     pub out: &'a mut (dyn Write + Send),
     /// Wird für jeden Aufruf gefragt, der eine Freigabe braucht.
-    pub approve: &'a mut (dyn FnMut(&ToolCall) -> Decision + Send),
+    pub approve: &'a mut (dyn FnMut(&ToolCall) -> Answer + Send),
 }
 
 /// Führt einen Gesprächszug aus und streamt die Antwort ins Terminal.
@@ -87,7 +88,13 @@ pub async fn chat_turn(
     terminal: Terminal<'_>,
 ) -> Result<Outcome, CliError> {
     let run = app.agent.run(session, input).await?;
-    drive(run, HashMap::new(), terminal).await
+    drive(
+        run,
+        HashMap::new(),
+        app.agent.config().tools.clone(),
+        terminal,
+    )
+    .await
 }
 
 /// Setzt einen unterbrochenen Lauf am letzten gespeicherten Zustand fort.
@@ -104,12 +111,29 @@ pub async fn resume_turn(
         }
     }
     let run = app.agent.resume(session).await?;
-    drive(run, calls, terminal).await
+    drive(run, calls, app.agent.config().tools.clone(), terminal).await
+}
+
+/// Antwort auf eine Rückfrage.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Answer {
+    Allow,
+    Deny,
+    /// Erlauben, aber mit diesen Argumenten statt denen des Modells.
+    Edit(serde_json::Value),
+}
+
+fn args_fit(specs: &[ToolSpec], tool: &str, input: &serde_json::Value) -> bool {
+    specs
+        .iter()
+        .find(|spec| spec.name == tool)
+        .is_some_and(|spec| validate(&spec.input_schema.0, input).is_ok())
 }
 
 async fn drive(
     mut run: Run,
     mut calls: HashMap<CallId, ToolCall>,
+    specs: Vec<ToolSpec>,
     terminal: Terminal<'_>,
 ) -> Result<Outcome, CliError> {
     let Terminal { out, approve } = terminal;
@@ -128,11 +152,46 @@ async fn drive(
                 }
             }
             Event::ApprovalNeeded { call_id } => {
-                let decision = calls
+                match calls
                     .get(&call_id)
                     .map(&mut *approve)
-                    .unwrap_or(Decision::Deny);
-                run.resolve(call_id, decision).await?;
+                    .unwrap_or(Answer::Deny)
+                {
+                    Answer::Allow => run.resolve(call_id, Decision::Allow).await?,
+                    Answer::Deny => run.resolve(call_id, Decision::Deny).await?,
+                    Answer::Edit(input) => {
+                        // Passen die neuen Argumente nicht zum Schema, bliebe die Rückfrage für
+                        // immer offen; dann wird der Aufruf abgelehnt.
+                        let valid = calls
+                            .get(&call_id)
+                            .is_some_and(|call| args_fit(&specs, &call.name, &input));
+                        if valid {
+                            run.approve_with(call_id, input).await?;
+                        } else {
+                            writeln!(
+                                out,
+                                "\n[Geänderte Argumente passen nicht zum Tool; Aufruf abgelehnt]"
+                            )?;
+                            run.resolve(call_id, Decision::Deny).await?;
+                        }
+                    }
+                }
+            }
+            Event::ToolArgsEdited { call_id, input } => {
+                if let Some(call) = calls.get_mut(&call_id) {
+                    call.input = input;
+                }
+            }
+            Event::PlanUpdated { todos } => {
+                writeln!(out, "\n[Plan]")?;
+                for todo in todos {
+                    let mark = match todo.status {
+                        TodoStatus::Completed => "x",
+                        TodoStatus::InProgress => "~",
+                        TodoStatus::Pending => " ",
+                    };
+                    writeln!(out, "  [{mark}] {}", todo.content)?;
+                }
             }
             Event::RunFinished { .. } => writeln!(out)?,
             _ => {}

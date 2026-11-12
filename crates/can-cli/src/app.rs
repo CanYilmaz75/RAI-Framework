@@ -7,13 +7,16 @@ use can_core::{MemoryStore, Provider, RuleSet, Store};
 use can_providers::{Anthropic, FakeProvider, OpenAiCompat, Recording, Retry};
 use can_runtime::{Agent, SystemClock};
 use can_store::SqliteStore;
-use can_tools::{HttpFetch, McpClient, ReadFile, shell, write_file};
+use can_tools::{
+    HttpFetch, LoadSkill, McpClient, ReadFile, SkillSet, WriteTodos, edit_file, glob, grep,
+    load_memory, ls, shell, system_prompt, write_file,
+};
 
 use crate::CliError;
 use crate::config::{Config, ProviderKind};
 
 /// Vorgabe für den System-Prompt.
-pub const DEFAULT_SYSTEM: &str = "Du bist ein hilfreicher Assistent. Nutze die Tools, um Dateien zu lesen, zu schreiben oder Programme zu starten.";
+pub const DEFAULT_SYSTEM: &str = "Du bist ein hilfreicher Assistent. Nutze die Tools, um Dateien zu finden, zu lesen und zu ändern oder Programme zu starten. Halte bei mehrstufigen Aufgaben einen Plan mit write_todos.";
 
 /// Einstellungen der Kommandozeile. Sie haben Vorrang vor der Konfigurationsdatei.
 #[derive(Clone, Debug, Default)]
@@ -100,18 +103,39 @@ pub async fn build_app(options: &Options) -> Result<App, CliError> {
     let mut policy = RuleSet::safe_defaults();
     policy.rules.extend(config.policy.rules.iter().cloned());
     let system = options.system.clone().or_else(|| config.system.clone());
+    // Gedächtnis (AGENTS.md) und Skills (.can/skills) liegen im Arbeitsverzeichnis.
+    let project = options
+        .workdir
+        .clone()
+        .or_else(|| config.workdir.clone())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let memory = load_memory(&project.join("AGENTS.md"))?;
+    let skills = SkillSet::load(&project.join(".can").join("skills"))?;
+    let system = system_prompt(
+        system.as_deref().unwrap_or(DEFAULT_SYSTEM),
+        memory.as_deref(),
+        &skills,
+    );
     let mut builder = Agent::builder()
         .provider_arc(provider(options)?)
         .model(model)
-        .system(system.unwrap_or_else(|| DEFAULT_SYSTEM.to_owned()))
+        .system(system)
         .tool(ReadFile::new())
         .tool(write_file)
+        .tool(edit_file)
+        .tool(ls)
+        .tool(glob)
+        .tool(grep)
+        .tool(WriteTodos::new())
         .tool(shell)
         .policy(policy)
         .limits(config.limits.limits())
         // Ein Nutzer, ein Rechner: nach einem Absturz soll `resume` sofort weitermachen können.
         .owner("can-cli")
         .store_arc(store.clone());
+    if !skills.is_empty() {
+        builder = builder.tool(LoadSkill::new(skills));
+    }
     if !config.http.allowed_hosts.is_empty() {
         builder = builder.tool(HttpFetch::new(config.http.allowed_hosts.clone()));
     }

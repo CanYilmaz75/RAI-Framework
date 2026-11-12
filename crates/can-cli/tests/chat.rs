@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use can_cli::{CliError, Options, Terminal, build_app, chat_turn};
-use can_core::{Decision, FinishReason, SessionId};
+use can_cli::{Answer, CliError, Options, Terminal, build_app, chat_turn};
+use can_core::{FinishReason, SessionId};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -98,7 +98,19 @@ fn assert_tool_round(requests: &[Value]) {
         .iter()
         .map(|tool| tool["function"]["name"].as_str().unwrap())
         .collect();
-    assert_eq!(tools, ["read_file", "shell", "write_file"]);
+    assert_eq!(
+        tools,
+        [
+            "edit_file",
+            "glob",
+            "grep",
+            "ls",
+            "read_file",
+            "shell",
+            "write_file",
+            "write_todos"
+        ]
+    );
     let messages = requests[1]["messages"].as_array().unwrap();
     let tool = messages
         .iter()
@@ -125,7 +137,7 @@ async fn chat_turn_answers_a_question_that_needs_read_file() {
     };
     let app = build_app(&options).await.unwrap();
     let mut out = Vec::new();
-    let mut approve = |_: &can_core::ToolCall| Decision::Deny;
+    let mut approve = |_: &can_core::ToolCall| Answer::Deny;
     let outcome = chat_turn(
         &app,
         SessionId::new(),
@@ -201,7 +213,7 @@ fn write_script() -> Vec<String> {
 /// `Ask` löst eine Rückfrage aus; erst die Antwort entscheidet, ob geschrieben wird.
 #[tokio::test]
 async fn write_file_asks_first_and_obeys_the_answer() {
-    for (answer, written) in [(Decision::Allow, true), (Decision::Deny, false)] {
+    for (answer, written) in [(Answer::Allow, true), (Answer::Deny, false)] {
         let (base_url, requests) = mock_api(write_script()).await;
         let dir = workdir();
         let options = Options {
@@ -214,7 +226,7 @@ async fn write_file_asks_first_and_obeys_the_answer() {
         let mut asked = Vec::new();
         let mut approve = |call: &can_core::ToolCall| {
             asked.push(call.name.clone());
-            answer
+            answer.clone()
         };
         let mut out = Vec::new();
         chat_turn(
