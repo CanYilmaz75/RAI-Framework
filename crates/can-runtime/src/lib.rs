@@ -1,6 +1,7 @@
 //! Agent-Loop als Zustandsmaschine: eine reine Schrittfunktion entscheidet, ein Treiber führt aus.
 
 pub mod agent;
+pub mod background;
 pub mod clock;
 pub mod context;
 mod driver;
@@ -18,6 +19,7 @@ mod structured;
 pub mod subagent;
 
 pub use agent::{Agent, AgentBuilder, BuildError};
+pub use background::{BackgroundAgents, TaskStatus};
 pub use clock::SystemClock;
 pub use context::{build_request, compaction_due, estimate_tokens, plan_compaction};
 pub use redact::Redactor;

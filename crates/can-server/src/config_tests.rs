@@ -295,3 +295,48 @@ provider = "ollama"
             .contains("region")
     );
 }
+
+#[tokio::test]
+async fn agents_can_use_earlier_agents_as_blocking_or_background_helpers() {
+    let text = r#"
+[[agents]]
+name = "rechercheur"
+model = "m"
+provider = "ollama"
+
+[[agents]]
+name = "chef"
+model = "m"
+provider = "ollama"
+subagents = ["rechercheur"]
+background_agents = ["rechercheur"]
+"#;
+    let config = ServerConfig::parse(text).unwrap();
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    let agents = config.agents(&store, env).await.unwrap();
+    let tools: Vec<&str> = agents["chef"]
+        .config()
+        .tools
+        .iter()
+        .map(|spec| spec.name.as_str())
+        .collect();
+    assert_eq!(
+        tools,
+        [
+            "rechercheur",
+            "rechercheur__cancel",
+            "rechercheur__check",
+            "rechercheur__list",
+            "rechercheur__message",
+            "rechercheur__start"
+        ]
+    );
+    let backwards = text.replace("subagents = [\"rechercheur\"]", "subagents = [\"chef\"]");
+    let error = ServerConfig::parse(&backwards)
+        .unwrap()
+        .agents(&store, env)
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("weiter unten"), "{error}");
+}

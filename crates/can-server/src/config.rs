@@ -123,6 +123,13 @@ pub struct AgentConfig {
     /// Tools als WebAssembly-Module, jedes mit eigenen Freigaben.
     #[serde(default)]
     pub wasm_tools: Vec<can_tools::WasmToolConfig>,
+    /// Weiter oben definierte Agenten, die dieser als Tool aufruft und auf deren Antwort er wartet.
+    #[serde(default)]
+    pub subagents: Vec<String>,
+    /// Weiter oben definierte Agenten, die dieser im Hintergrund arbeiten lässt; je fünf Tools
+    /// `<name>__start`, `__check`, `__message`, `__cancel`, `__list`.
+    #[serde(default)]
+    pub background_agents: Vec<String>,
 }
 
 fn yes() -> bool {
@@ -331,7 +338,9 @@ impl ServerConfig {
             .unwrap_or_else(|| "can-server".to_owned());
         let mut agents = HashMap::new();
         for config in &self.agents {
-            let agent = config.build(store.clone(), &worker, &lookup).await?;
+            let agent = config
+                .build(store.clone(), &worker, &lookup, &agents)
+                .await?;
             agents.insert(config.name.clone(), agent);
         }
         Ok(agents)

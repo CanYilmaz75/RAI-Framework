@@ -1,5 +1,6 @@
 //! Baut aus der Konfiguration eines Agenten den Agenten: Provider, Tools, Sandbox, Policy.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,7 +9,7 @@ use can_core::{
     ToolSpec,
 };
 use can_providers::{ProviderSettings, Retry};
-use can_runtime::{Agent, SystemClock};
+use can_runtime::{Agent, BackgroundAgents, SubAgent, SystemClock};
 use can_tools::mcp::HttpTransport;
 use can_tools::{
     HttpFetch, LoadSkill, McpClient, ReadFile, SandboxedShell, SkillSet, WasmTool, WriteTodos,
@@ -67,6 +68,7 @@ impl AgentConfig {
         store: Arc<dyn Store>,
         worker: &str,
         lookup: &impl Fn(&str) -> Option<String>,
+        built: &HashMap<String, Agent>,
     ) -> Result<Agent, ConfigError> {
         let defaults = Limits::default();
         let limits = Limits {
@@ -129,6 +131,27 @@ impl AgentConfig {
         }
         if !skills.is_empty() {
             tools.push(Arc::new(LoadSkill::new(skills)));
+        }
+        let earlier = |name: &String| {
+            built.get(name).cloned().ok_or_else(|| {
+                invalid(format!(
+                    "Agent {}: Sub-Agent {name} ist unbekannt oder steht erst weiter unten",
+                    self.name
+                ))
+            })
+        };
+        for name in &self.subagents {
+            let description =
+                format!("Gibt eine Aufgabe an den Agenten {name} und wartet auf seine Antwort.");
+            tools.push(Arc::new(SubAgent::new(
+                name.clone(),
+                description,
+                earlier(name)?,
+            )));
+        }
+        for name in &self.background_agents {
+            let description = format!("arbeitet als Agent {name} selbstständig im Hintergrund");
+            tools.extend(BackgroundAgents::new(name.clone(), description, earlier(name)?).tools());
         }
         for (name, server) in &self.mcp {
             let client = match (&server.command, &server.url) {
