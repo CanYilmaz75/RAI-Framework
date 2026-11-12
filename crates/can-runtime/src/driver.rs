@@ -48,6 +48,8 @@ pub(crate) struct Driver {
     pub(crate) cancel: CancellationToken,
     /// Text-Deltas, die bei vollem Kanal zusammengefasst wurden.
     pub(crate) delta: String,
+    /// Namensraum für die Tools, etwa der Mandant.
+    pub(crate) namespace: String,
 }
 
 impl Driver {
@@ -256,6 +258,7 @@ impl Driver {
             clock: self.agent.clock.clone(),
             progress: ProgressSink::noop(),
             secrets: self.agent.secrets.clone(),
+            namespace: self.namespace.clone(),
         };
         let max_output_bytes = tool.spec().max_output_bytes;
         match exec::run_tool(tool, call, cx, &self.cancel, self.remaining()).await {

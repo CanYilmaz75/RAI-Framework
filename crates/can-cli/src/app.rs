@@ -3,13 +3,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use can_core::{MemoryStore, Provider, RuleSet, Store};
+use can_core::{InMemoryBank, MemoryBank, MemoryStore, Provider, RuleSet, Store};
 use can_providers::{FakeProvider, Recording, Retry};
 use can_runtime::{Agent, SystemClock};
 use can_store::SqliteStore;
 use can_tools::{
     HttpFetch, LoadSkill, McpClient, ReadFile, SkillSet, WasmTool, WriteTodos, edit_file, glob,
-    grep, load_memory, ls, shell, system_prompt, write_file,
+    grep, load_memory, ls, memory_tools, shell, system_prompt, write_file,
 };
 
 use crate::CliError;
@@ -80,6 +80,16 @@ pub fn open_store(options: &Options) -> Result<Arc<dyn Store>, CliError> {
     )
 }
 
+/// Das durchsuchbare Gedächtnis: in derselben SQLite-Datei wie die Sitzungen, sonst flüchtig.
+fn open_memory(options: &Options) -> Result<Arc<dyn MemoryBank>, CliError> {
+    Ok(
+        match options.db.clone().or_else(|| options.config.db.clone()) {
+            Some(path) => Arc::new(SqliteStore::open(path)?),
+            None => Arc::new(InMemoryBank::new()),
+        },
+    )
+}
+
 /// Baut den Agenten. Lesen ist erlaubt; Schreiben, `shell`, HTTP und MCP-Tools fragen nach,
 /// solange keine Regel der Konfiguration etwas anderes sagt.
 pub async fn build_app(options: &Options) -> Result<App, CliError> {
@@ -130,6 +140,11 @@ pub async fn build_app(options: &Options) -> Result<App, CliError> {
         .store_arc(store.clone());
     if !skills.is_empty() {
         builder = builder.tool(LoadSkill::new(skills));
+    }
+    if config.memory {
+        for tool in memory_tools(open_memory(options)?) {
+            builder = builder.tool_arc(tool);
+        }
     }
     for wasm in &config.wasm_tools {
         let tool = WasmTool::load(wasm.clone())

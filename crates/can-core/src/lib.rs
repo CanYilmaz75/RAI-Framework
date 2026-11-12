@@ -7,6 +7,7 @@ mod base64;
 pub mod clock;
 pub mod event;
 pub mod ids;
+pub mod knowledge;
 pub mod message;
 pub mod moderation;
 pub mod policy;
@@ -25,6 +26,7 @@ pub use event::{
     SCHEMA_VERSION, Timestamp, Todo, TodoStatus, ToolCall,
 };
 pub use ids::{CallId, IdError, RunId, SessionId};
+pub use knowledge::{DEFAULT_NAMESPACE, InMemoryBank, Memory, MemoryBank};
 pub use message::{
     Bytes, ContentBlock, Message, OutputBlock, Pricing, Role, StopReason, ToolOutput, Usage,
 };

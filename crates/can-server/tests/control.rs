@@ -46,7 +46,8 @@ async fn approvals_quota_and_metrics() {
             json!({"input": "x"}),
         )
         .await;
-    assert_eq!(busy.0, StatusCode::TOO_MANY_REQUESTS);
+    // Die Sitzung selbst ist belegt: ohne `mode` wird abgelehnt, das Kontingent zählt hier nicht.
+    assert_eq!(busy.0, StatusCode::CONFLICT);
 
     let path = format!(
         "/v1/sessions/{session}/approvals/{}",

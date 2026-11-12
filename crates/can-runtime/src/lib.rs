@@ -12,6 +12,7 @@ mod fork;
 pub mod redact;
 pub mod registry;
 pub mod run;
+mod scope;
 pub mod step;
 mod step_plan;
 mod step_types;

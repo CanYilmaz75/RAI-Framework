@@ -28,6 +28,15 @@ CREATE TABLE blobs (
 );
 ",
     "ALTER TABLE events ADD COLUMN chain TEXT;",
+    "
+CREATE TABLE memories (
+  id         TEXT PRIMARY KEY,
+  namespace  TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  text       TEXT NOT NULL        -- bei Verschlüsselung versiegelt
+);
+CREATE INDEX memories_namespace ON memories (namespace, created_at);
+",
 ];
 
 /// Stellt WAL-Modus und volle Synchronisierung ein und bringt das Schema auf den neuesten Stand.

@@ -67,6 +67,7 @@ fn ctx() -> ToolCtx {
         clock: Arc::new(ManualClock::default()),
         progress: ProgressSink::noop(),
         secrets: SecretsHandle::empty(),
+        namespace: can_core::DEFAULT_NAMESPACE.into(),
     }
 }
 

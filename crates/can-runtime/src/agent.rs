@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use can_core::{
-    ByEffect, Clock, Decision, Limits, MemoryStore, Message, Moderator, Phase, Policy, Provider,
-    RunConfig, RunId, RunState, SecretsHandle, SessionId, Store, Tool,
+    ByEffect, Clock, DEFAULT_NAMESPACE, Decision, Limits, MemoryStore, Message, Moderator, Phase,
+    Policy, Provider, RunConfig, RunId, RunState, SecretsHandle, SessionId, Store, Tool,
 };
 use serde_json::{Map, Value};
 use tokio::sync::mpsc;
@@ -71,12 +71,14 @@ impl Agent {
         session: SessionId,
         input: impl Into<Message>,
     ) -> Result<Run, RunError> {
-        self.start(session, Some(input.into()), true).await
+        self.start(session, Some(input.into()), true, DEFAULT_NAMESPACE.into())
+            .await
     }
 
     /// Setzt einen unterbrochenen Lauf am letzten gespeicherten Zustand fort.
     pub async fn resume(&self, session: SessionId) -> Result<Run, RunError> {
-        self.start(session, None, true).await
+        self.start(session, None, true, DEFAULT_NAMESPACE.into())
+            .await
     }
 
     /// Wie [`Agent::run`], aber ohne Mensch: jede Rückfrage wird zur Ablehnung.
@@ -85,7 +87,8 @@ impl Agent {
         session: SessionId,
         input: impl Into<Message>,
     ) -> Result<Run, RunError> {
-        self.start(session, Some(input.into()), false).await
+        self.start(session, Some(input.into()), false, DEFAULT_NAMESPACE.into())
+            .await
     }
 
     /// Kurzform: liefert nur das Ergebnis und behandelt `Ask` als `Deny`.
@@ -94,17 +97,18 @@ impl Agent {
         session: SessionId,
         input: impl Into<Message>,
     ) -> Result<Outcome, RunError> {
-        self.start(session, Some(input.into()), false)
+        self.start(session, Some(input.into()), false, DEFAULT_NAMESPACE.into())
             .await?
             .outcome()
             .await
     }
 
-    async fn start(
+    pub(crate) async fn start(
         &self,
         session: SessionId,
         input: Option<Message>,
         interactive: bool,
+        namespace: String,
     ) -> Result<Run, RunError> {
         if let (Some(moderator), Some(message)) = (&self.inner.moderator, &input) {
             moderator
@@ -136,6 +140,7 @@ impl Agent {
             commands: command_rx,
             cancel: cancel.clone(),
             delta: String::new(),
+            namespace,
         };
         let span = tracing::info_span!("run", session = %session, run = %run_id);
         let task = tokio::spawn(driver.run(first).instrument(span));

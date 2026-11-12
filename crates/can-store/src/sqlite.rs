@@ -27,10 +27,10 @@ pub struct SessionInfo {
 #[derive(Clone)]
 pub struct SqliteStore {
     connection: Arc<Mutex<Connection>>,
-    sealer: Sealer,
+    pub(crate) sealer: Sealer,
 }
 
-fn backend(error: impl std::error::Error + Send + Sync + 'static) -> StoreError {
+pub(crate) fn backend(error: impl std::error::Error + Send + Sync + 'static) -> StoreError {
     StoreError::Backend(Box::new(error))
 }
 
@@ -67,7 +67,7 @@ impl SqliteStore {
     }
 
     /// Führt `work` mit der Verbindung auf einem blockierenden Thread aus.
-    async fn with<T, F>(&self, work: F) -> Result<T, StoreError>
+    pub(crate) async fn with<T, F>(&self, work: F) -> Result<T, StoreError>
     where
         T: Send + 'static,
         F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,

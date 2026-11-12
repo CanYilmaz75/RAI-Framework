@@ -16,8 +16,9 @@ async fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let secrets = config.secrets.resolve(&config.secret_names()).await?;
     let lookup = |name: &str| secrets.get(name).cloned();
     let directory = config.directory(lookup)?;
-    let (store, sessions) = config.open_store(lookup).await?;
-    let agents = config.agents(&store, lookup).await?;
+    let storage = config.open_store(lookup).await?;
+    let (store, sessions) = (storage.store, storage.sessions);
+    let agents = config.agents(&store, &storage.memory, lookup).await?;
     if agents.is_empty() {
         return Err("Die Konfiguration enthält keinen Agenten.".into());
     }
@@ -26,6 +27,7 @@ async fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
         runs: runs.clone(),
         directory,
         clock: Arc::new(SystemClock),
+        memory: storage.memory,
     });
 
     // Unterbrochene Läufe übernehmen: gleich beim Start und danach regelmäßig.

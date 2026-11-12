@@ -32,6 +32,9 @@ pub struct Config {
     /// Tools als WebAssembly-Module, jedes mit eigenen Freigaben.
     #[serde(default)]
     pub wasm_tools: Vec<can_tools::WasmToolConfig>,
+    /// Tools `remember`, `recall` und `forget`; dauerhaft nur mit `db`.
+    #[serde(default)]
+    pub memory: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

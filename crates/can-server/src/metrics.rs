@@ -107,6 +107,15 @@ impl Metrics {
     }
 }
 
+/// `GET /metrics`: Kennzahlen samt laufender Läufe und offener Rückfragen.
+pub async fn handler(
+    axum::extract::State(app): axum::extract::State<std::sync::Arc<crate::App>>,
+) -> String {
+    app.runs
+        .metrics
+        .render(app.runs.running(), app.runs.approvals(None).len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

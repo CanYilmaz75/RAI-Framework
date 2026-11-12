@@ -6,6 +6,7 @@ pub mod fs;
 pub mod http;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+pub mod memory;
 pub mod read_file;
 pub mod sandbox;
 pub mod search;
@@ -23,6 +24,7 @@ pub use edit::edit_file;
 pub use http::HttpFetch;
 #[cfg(feature = "mcp")]
 pub use mcp::{McpClient, McpError};
+pub use memory::{MemoryTool, memory_tools};
 pub use read_file::ReadFile;
 pub use sandbox::{Sandbox, SandboxMode};
 pub use search::{glob, grep, ls};

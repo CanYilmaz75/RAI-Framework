@@ -37,16 +37,25 @@ CREATE TABLE can_blobs (
 );
 ",
     "ALTER TABLE can_events ADD COLUMN chain TEXT;",
+    "
+CREATE TABLE can_memories (
+  id         TEXT PRIMARY KEY,
+  namespace  TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  text       TEXT NOT NULL      -- bei Verschlüsselung versiegelt
+);
+CREATE INDEX can_memories_namespace ON can_memories (namespace, created_at);
+",
 ];
 
 /// Event-Log in PostgreSQL. Mehrere Prozesse dürfen dieselbe Datenbank nutzen; pro Sitzung
 /// schreibt immer nur einer.
 pub struct PostgresStore {
-    client: Mutex<Client>,
-    sealer: Sealer,
+    pub(crate) client: Mutex<Client>,
+    pub(crate) sealer: Sealer,
 }
 
-fn backend(error: tokio_postgres::Error) -> StoreError {
+pub(crate) fn backend(error: tokio_postgres::Error) -> StoreError {
     StoreError::Backend(Box::new(error))
 }
 

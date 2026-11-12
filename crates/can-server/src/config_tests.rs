@@ -34,6 +34,10 @@ user = "ada"
 role = "admin"
 "#;
 
+fn bank() -> Arc<dyn MemoryBank> {
+    Arc::new(InMemoryBank::new())
+}
+
 fn env(name: &str) -> Option<String> {
     match name {
         "ACME_ADA_KEY" => Some("ein-langer-api-schluessel".to_owned()),
@@ -76,7 +80,7 @@ fn full_file_parses_and_builds_directory_and_agents() {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(config.agents(&store, env))
+        .block_on(config.agents(&store, &bank(), env))
         .unwrap();
     let tools: Vec<&str> = agents["helfer"]
         .config()
@@ -128,7 +132,9 @@ fn missing_or_short_keys_are_refused() {
 #[tokio::test]
 async fn stores_open_and_missing_database_url_is_reported() {
     let memory = ServerConfig::parse("").unwrap();
-    let (store, sessions) = memory.open_store(env).await.unwrap();
+    let storage = memory.open_store(env).await.unwrap();
+    let (store, sessions) = (storage.store, storage.sessions);
+    assert!(storage.memory.all("acme").await.unwrap().is_empty());
     assert!(store.load(SessionId::new()).await.unwrap().is_empty());
     assert!(sessions.list("acme").await.unwrap().is_empty());
     let postgres = ServerConfig::parse(FULL).unwrap();
@@ -171,7 +177,7 @@ memory_mb = 256
     );
     assert!(config.secret_names().contains(&"STORE_KEY".to_owned()));
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-    let agents = config.agents(&store, env).await.unwrap();
+    let agents = config.agents(&store, &bank(), env).await.unwrap();
     let agent = agents["sicher"].config();
     assert_eq!(agent.exfiltration_guard, Some(Decision::Deny));
     let confidential: Vec<&str> = agent
@@ -200,7 +206,7 @@ memory_mb = 256
     let both = "[[agents]]\nname = \"a\"\nmodel = \"m\"\n[agents.mcp.x]\ncommand = \"c\"\nurl = \"http://x\"";
     let error = ServerConfig::parse(both)
         .unwrap()
-        .agents(&store, env)
+        .agents(&store, &bank(), env)
         .await
         .err()
         .unwrap();
@@ -225,7 +231,7 @@ async fn coding_tools_memory_and_skills_come_from_the_config() {
     );
     let config = ServerConfig::parse(&text).unwrap();
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-    let agents = config.agents(&store, env).await.unwrap();
+    let agents = config.agents(&store, &bank(), env).await.unwrap();
     let agent = agents["coder"].config();
     let tools: Vec<&str> = agent.tools.iter().map(|spec| spec.name.as_str()).collect();
     assert_eq!(
@@ -277,7 +283,10 @@ provider = "ollama"
     let lookup =
         |name: &str| matches!(name, "VERTEX_TOKEN" | "BEDROCK_KEY").then(|| "geheim".to_owned());
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-    assert_eq!(config.agents(&store, lookup).await.unwrap().len(), 3);
+    assert_eq!(
+        config.agents(&store, &bank(), lookup).await.unwrap().len(),
+        3
+    );
 
     let unknown =
         ServerConfig::parse("[[agents]]\nname = \"x\"\nmodel = \"m\"\nprovider = \"gpt\"");
@@ -287,7 +296,7 @@ provider = "ollama"
             .unwrap();
     assert!(
         incomplete
-            .agents(&store, lookup)
+            .agents(&store, &bank(), lookup)
             .await
             .err()
             .unwrap()
@@ -313,7 +322,7 @@ background_agents = ["rechercheur"]
 "#;
     let config = ServerConfig::parse(text).unwrap();
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-    let agents = config.agents(&store, env).await.unwrap();
+    let agents = config.agents(&store, &bank(), env).await.unwrap();
     let tools: Vec<&str> = agents["chef"]
         .config()
         .tools
@@ -334,9 +343,24 @@ background_agents = ["rechercheur"]
     let backwards = text.replace("subagents = [\"rechercheur\"]", "subagents = [\"chef\"]");
     let error = ServerConfig::parse(&backwards)
         .unwrap()
-        .agents(&store, env)
+        .agents(&store, &bank(), env)
         .await
         .err()
         .unwrap();
     assert!(error.to_string().contains("weiter unten"), "{error}");
+}
+
+#[tokio::test]
+async fn memory_switches_on_the_memory_tools() {
+    let text = "[[agents]]\nname = \"a\"\nmodel = \"m\"\nprovider = \"ollama\"\nmemory = true\n";
+    let config = ServerConfig::parse(text).unwrap();
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    let agents = config.agents(&store, &bank(), env).await.unwrap();
+    let tools: Vec<&str> = agents["a"]
+        .config()
+        .tools
+        .iter()
+        .map(|spec| spec.name.as_str())
+        .collect();
+    assert_eq!(tools, ["forget", "recall", "remember"]);
 }

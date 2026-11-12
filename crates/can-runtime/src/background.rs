@@ -89,15 +89,11 @@ impl BackgroundAgents {
     }
 
     /// Startet einen Lauf in der Sitzung der Aufgabe und hält ihr Ergebnis fest, sobald er endet.
-    async fn launch(
-        &self,
-        owner: SessionId,
-        id: SessionId,
-        prompt: String,
-    ) -> Result<(), ToolError> {
+    async fn launch(&self, cx: &ToolCtx, id: SessionId, prompt: String) -> Result<(), ToolError> {
+        let owner = cx.session;
         let run = self
             .agent
-            .run_unattended(id, prompt.clone())
+            .run_unattended_in(cx.namespace.clone(), id, prompt.clone())
             .await
             .map_err(|error| for_model(format!("Hintergrund-Agent nicht startbar: {error}")))?;
         let changed = Arc::new(Notify::new());
@@ -156,7 +152,7 @@ impl BackgroundAgents {
                     return Err(for_model("`task` ist leer."));
                 }
                 let id = SessionId::new();
-                self.launch(owner, id, task).await?;
+                self.launch(cx, id, task).await?;
                 Ok(format!(
                     "Aufgabe {id} läuft im Hintergrund. Mit {}__check fragst du nach dem Stand.",
                     self.name
@@ -217,7 +213,7 @@ impl BackgroundAgents {
                     }
                     // Sonst setzt ein neuer Lauf die Aufgabe mit ihrem ganzen Verlauf fort.
                     _ => {
-                        self.launch(owner, id, message).await?;
+                        self.launch(cx, id, message).await?;
                         Ok(format!("Aufgabe {id} wird mit der Nachricht fortgesetzt."))
                     }
                 }

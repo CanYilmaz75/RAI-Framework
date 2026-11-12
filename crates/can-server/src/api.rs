@@ -53,7 +53,7 @@ impl FromRequestParts<Arc<App>> for Principal {
     }
 }
 
-fn require(principal: &Principal, role: Role) -> Result<(), ApiError> {
+pub(crate) fn require(principal: &Principal, role: Role) -> Result<(), ApiError> {
     if principal.role >= role {
         return Ok(());
     }
@@ -391,14 +391,4 @@ pub async fn verify(
     Ok(Json(
         json!({"intact": broken.is_none(), "first_broken_seq": broken}),
     ))
-}
-
-pub async fn healthz() -> &'static str {
-    "ok"
-}
-
-pub async fn metrics(State(app): State<Arc<App>>) -> String {
-    app.runs
-        .metrics
-        .render(app.runs.running(), app.runs.approvals(None).len())
 }

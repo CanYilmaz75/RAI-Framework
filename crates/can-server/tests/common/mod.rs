@@ -63,6 +63,7 @@ pub async fn serve_with(
         runs,
         directory: directory(),
         clock: Arc::new(SystemClock),
+        memory: Arc::new(can_core::InMemoryBank::new()),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());

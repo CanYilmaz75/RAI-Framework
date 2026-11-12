@@ -5,9 +5,11 @@ pub mod auth;
 pub mod branch;
 mod build;
 pub mod config;
+pub mod knowledge;
 pub mod meta;
 pub mod metrics;
 pub mod pgmeta;
+mod queue;
 pub mod runs;
 pub mod secrets;
 pub mod stream;
@@ -16,8 +18,8 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::response::Html;
-use axum::routing::{get, post};
-use can_core::Clock;
+use axum::routing::{delete, get, post};
+use can_core::{Clock, MemoryBank};
 
 pub use auth::{Directory, Principal, Quota, Role};
 pub use config::ServerConfig;
@@ -30,6 +32,8 @@ pub struct App {
     pub runs: Arc<RunManager>,
     pub directory: Directory,
     pub clock: Arc<dyn Clock>,
+    /// Gedächtnis aller Mandanten; jeder sieht nur seinen Namensraum.
+    pub memory: Arc<dyn MemoryBank>,
 }
 
 /// Die Routen des Dienstes. `/healthz`, `/metrics` und die Oberfläche brauchen keinen Schlüssel;
@@ -46,8 +50,8 @@ pub fn router(app: Arc<App>) -> Router {
                 )
             }),
         )
-        .route("/healthz", get(api::healthz))
-        .route("/metrics", get(api::metrics))
+        .route("/healthz", get(|| async { "ok" }))
+        .route("/metrics", get(metrics::handler))
         .route("/v1/agents", get(api::list_agents))
         .route(
             "/v1/sessions",
@@ -69,5 +73,7 @@ pub fn router(app: Arc<App>) -> Router {
             post(api::resolve_approval),
         )
         .route("/v1/approvals", get(api::list_approvals))
+        .route("/v1/memories", get(knowledge::list).post(knowledge::add))
+        .route("/v1/memories/{id}", delete(knowledge::delete))
         .with_state(app)
 }

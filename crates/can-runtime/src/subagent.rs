@@ -52,7 +52,7 @@ impl Tool for SubAgent {
         };
         let mut run = self
             .agent
-            .run_unattended(SessionId::new(), task)
+            .run_unattended_in(cx.namespace.clone(), SessionId::new(), task)
             .await
             .map_err(|error| failed(&error))?;
         let cancel = run.cancel_token();

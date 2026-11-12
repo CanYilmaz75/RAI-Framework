@@ -5,15 +5,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use can_core::{
-    BlockList, Limits, Provider, RuleSet, Secret, Store, Tool, ToolCtx, ToolError, ToolOutput,
-    ToolSpec,
+    BlockList, Limits, MemoryBank, Provider, RuleSet, Secret, Store, Tool, ToolCtx, ToolError,
+    ToolOutput, ToolSpec,
 };
 use can_providers::{ProviderSettings, Retry};
 use can_runtime::{Agent, BackgroundAgents, SubAgent, SystemClock};
 use can_tools::mcp::HttpTransport;
 use can_tools::{
     HttpFetch, LoadSkill, McpClient, ReadFile, SandboxedShell, SkillSet, WasmTool, WriteTodos,
-    edit_file, glob, grep, load_memory, ls, shell, system_prompt, write_file,
+    edit_file, glob, grep, load_memory, ls, memory_tools, shell, system_prompt, write_file,
 };
 
 use crate::config::{AgentConfig, ConfigError, invalid};
@@ -66,6 +66,7 @@ impl AgentConfig {
     pub(crate) async fn build(
         &self,
         store: Arc<dyn Store>,
+        memory_bank: &Arc<dyn MemoryBank>,
         worker: &str,
         lookup: &impl Fn(&str) -> Option<String>,
         built: &HashMap<String, Agent>,
@@ -131,6 +132,9 @@ impl AgentConfig {
         }
         if !skills.is_empty() {
             tools.push(Arc::new(LoadSkill::new(skills)));
+        }
+        if self.memory {
+            tools.extend(memory_tools(memory_bank.clone()));
         }
         let earlier = |name: &String| {
             built.get(name).cloned().ok_or_else(|| {

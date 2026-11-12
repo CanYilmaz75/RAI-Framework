@@ -37,9 +37,9 @@ pub use can_tools as tools;
 pub mod prelude {
     pub use can_core::{
         AllowAll, BlockList, ByEffect, Clock, Decision, DenyAll, Effect, Envelope, Event,
-        FinishReason, Limits, MemoryStore, Message, Moderator, Policy, Pricing, Provider, Rule,
-        RuleSet, Secret, SecretsHandle, SessionId, Store, Tool, ToolCtx, ToolError, ToolOutput,
-        ToolSpec,
+        FinishReason, InMemoryBank, Limits, MemoryBank, MemoryStore, Message, Moderator, Policy,
+        Pricing, Provider, Rule, RuleSet, Secret, SecretsHandle, SessionId, Store, Tool, ToolCtx,
+        ToolError, ToolOutput, ToolSpec,
     };
     pub use can_macros::tool;
     pub use can_providers::{FakeProvider, Fallback, Recording, Retry};

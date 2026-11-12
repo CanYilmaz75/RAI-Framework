@@ -23,6 +23,7 @@ fn ctx(session: SessionId) -> ToolCtx {
         clock: Arc::new(can_runtime::SystemClock),
         progress: ProgressSink::noop(),
         secrets: SecretsHandle::empty(),
+        namespace: can_core::DEFAULT_NAMESPACE.into(),
     }
 }
 

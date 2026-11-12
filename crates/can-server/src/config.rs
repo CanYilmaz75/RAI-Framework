@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use can_core::{Decision, MemoryStore, Pricing, Rule, Store};
+use can_core::{Decision, InMemoryBank, MemoryBank, MemoryStore, Pricing, Rule, Store};
 use can_runtime::Agent;
 use can_store::{Cipher, PostgresStore, SqliteStore};
 use can_tools::Sandbox;
@@ -100,6 +100,9 @@ pub struct AgentConfig {
     pub timeout_secs: Option<u64>,
     /// Datei, deren Inhalt als Gedächtnis immer im System-Prompt steht.
     pub memory_file: Option<PathBuf>,
+    /// Tools `remember`, `recall` und `forget` für das durchsuchbare Gedächtnis des Mandanten.
+    #[serde(default)]
+    pub memory: bool,
     /// Ordner mit Skills (`<name>/SKILL.md`); das Modell lädt sie bei Bedarf.
     pub skills_dir: Option<PathBuf>,
     /// Preise des Modells je Million Token, für Kosten und Kostenbudget.
@@ -285,11 +288,12 @@ impl ServerConfig {
         names
     }
 
-    /// Öffnet Event-Store und Sitzungsverzeichnis.
+    /// Öffnet Event-Store, Sitzungsverzeichnis und Gedächtnis; das Gedächtnis liegt im selben
+    /// Backend wie die Events und wird genauso verschlüsselt.
     pub async fn open_store(
         &self,
         lookup: impl Fn(&str) -> Option<String>,
-    ) -> Result<(Arc<dyn Store>, Arc<dyn SessionDirectory>), ConfigError> {
+    ) -> Result<Storage, ConfigError> {
         let cipher = match &self.encryption_key_env {
             Some(variable) => {
                 let key = lookup(variable)
@@ -299,17 +303,23 @@ impl ServerConfig {
             None => None,
         };
         Ok(match &self.store {
-            StoreConfig::Memory => (
-                Arc::new(MemoryStore::new()),
-                Arc::new(MemoryDirectory::new()),
-            ),
+            StoreConfig::Memory => Storage {
+                store: Arc::new(MemoryStore::new()),
+                sessions: Arc::new(MemoryDirectory::new()),
+                memory: Arc::new(InMemoryBank::new()),
+            },
             StoreConfig::Sqlite { path } => {
                 let store = SqliteStore::open(path).map_err(invalid)?;
                 let store = match cipher {
                     Some(cipher) => store.with_cipher(cipher),
                     None => store,
                 };
-                (Arc::new(store), Arc::new(MemoryDirectory::new()))
+                let store = Arc::new(store);
+                Storage {
+                    store: store.clone(),
+                    sessions: Arc::new(MemoryDirectory::new()),
+                    memory: store,
+                }
             }
             StoreConfig::Postgres { url_env } => {
                 let url =
@@ -320,7 +330,12 @@ impl ServerConfig {
                     None => store,
                 };
                 let sessions = PostgresDirectory::connect(&url).await.map_err(invalid)?;
-                (Arc::new(store), Arc::new(sessions))
+                let store = Arc::new(store);
+                Storage {
+                    store: store.clone(),
+                    sessions: Arc::new(sessions),
+                    memory: store,
+                }
             }
         })
     }
@@ -329,6 +344,7 @@ impl ServerConfig {
     pub async fn agents(
         &self,
         store: &Arc<dyn Store>,
+        memory: &Arc<dyn MemoryBank>,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<HashMap<String, Agent>, ConfigError> {
         let worker = self
@@ -339,12 +355,19 @@ impl ServerConfig {
         let mut agents = HashMap::new();
         for config in &self.agents {
             let agent = config
-                .build(store.clone(), &worker, &lookup, &agents)
+                .build(store.clone(), memory, &worker, &lookup, &agents)
                 .await?;
             agents.insert(config.name.clone(), agent);
         }
         Ok(agents)
     }
+}
+
+/// Was `open_store` öffnet.
+pub struct Storage {
+    pub store: Arc<dyn Store>,
+    pub sessions: Arc<dyn SessionDirectory>,
+    pub memory: Arc<dyn MemoryBank>,
 }
 
 #[cfg(test)]

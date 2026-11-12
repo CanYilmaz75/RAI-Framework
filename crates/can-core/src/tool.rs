@@ -127,6 +127,8 @@ pub struct ToolCtx {
     pub clock: Arc<dyn Clock>,
     pub progress: ProgressSink,
     pub secrets: SecretsHandle,
+    /// Namensraum des Laufs, etwa der Mandant; trennt zum Beispiel das Gedächtnis.
+    pub namespace: String,
 }
 
 /// Fehler eines Tools.

@@ -318,12 +318,12 @@ impl RunState {
 
     /// Text der letzten Assistentennachricht.
     pub fn last_assistant_text(&self) -> String {
-        self.messages
+        let last = self
+            .messages
             .iter()
             .rev()
-            .find(|message| message.role == Role::Assistant)
-            .map(Message::text)
-            .unwrap_or_default()
+            .find(|m| m.role == Role::Assistant);
+        last.map(Message::text).unwrap_or_default()
     }
 
     fn push_message(&mut self, message: Message, seq: u64) {
@@ -348,16 +348,13 @@ impl RunState {
             return;
         }
         self.phase = Phase::RunTools;
-        if self
-            .pending
-            .iter()
-            .all(|pending| matches!(pending.status, CallStatus::Finished { .. }))
-        {
+        let finished =
+            |pending: &PendingCall| matches!(pending.status, CallStatus::Finished { .. });
+        if self.pending.iter().all(finished) {
             self.close_pending(seq);
         }
     }
 
-    /// Schreibt für jeden offenen Aufruf ein Ergebnis in den Verlauf, damit dieser gültig bleibt.
     /// Gibt die eingeschobenen Nachrichten in den Verlauf, sobald das gefahrlos geht.
     fn flush_injected(&mut self) {
         for (seq, message) in std::mem::take(&mut self.injected) {
@@ -365,6 +362,7 @@ impl RunState {
         }
     }
 
+    /// Schreibt für jeden offenen Aufruf ein Ergebnis in den Verlauf, damit dieser gültig bleibt.
     fn close_pending(&mut self, seq: u64) {
         if self.pending.is_empty() {
             return;

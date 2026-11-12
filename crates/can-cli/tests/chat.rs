@@ -334,3 +334,39 @@ async fn resume_continues_an_interrupted_run_from_the_database() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn memory_in_the_config_adds_the_memory_tools() {
+    let dir = workdir();
+    let mut options = Options {
+        model: Some("test-modell".into()),
+        workdir: Some(dir.clone()),
+        base_url: Some("http://127.0.0.1:9".into()),
+        db: Some(dir.join("sitzungen.db")),
+        ..Options::default()
+    };
+    options.config.memory = true;
+    let app = build_app(&options).await.unwrap();
+    let names: Vec<String> = app
+        .agent
+        .config()
+        .tools
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect();
+    for wanted in ["remember", "recall", "forget"] {
+        assert!(
+            names.iter().any(|name| name == wanted),
+            "{wanted} fehlt in {names:?}"
+        );
+    }
+    options.config.memory = false;
+    let app = build_app(&options).await.unwrap();
+    assert!(
+        !app.agent
+            .config()
+            .tools
+            .iter()
+            .any(|spec| spec.name == "recall")
+    );
+}
