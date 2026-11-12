@@ -204,10 +204,15 @@ url = "{base}/mcp"
             "demo__echo",
             "demo__fail",
             "demo__picture",
+            "edit_file",
+            "glob",
+            "grep",
             "http_fetch",
+            "ls",
             "read_file",
             "shell",
-            "write_file"
+            "write_file",
+            "write_todos"
         ]
     );
     let first = &requests[0]["messages"][0]["content"];

@@ -21,8 +21,8 @@ pub mod tool;
 pub use assemble::Assembler;
 pub use clock::{Clock, ManualClock};
 pub use event::{
-    Approver, Decision, Digest, Envelope, Event, FinishReason, LimitKind, SCHEMA_VERSION,
-    Timestamp, ToolCall,
+    Approver, Decision, Digest, Envelope, Event, FinishReason, LimitKind, PLAN_TOOL,
+    SCHEMA_VERSION, Timestamp, Todo, TodoStatus, ToolCall,
 };
 pub use ids::{CallId, IdError, RunId, SessionId};
 pub use message::{

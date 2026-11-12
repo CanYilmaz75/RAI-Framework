@@ -146,6 +146,10 @@ impl Driver {
                 up_to_seq,
                 summary: redactor.value(summary),
             },
+            Input::ApprovedWithEdit { call_id, input } => Input::ApprovedWithEdit {
+                call_id,
+                input: redactor.value(input),
+            },
             other => other,
         }
     }
@@ -189,6 +193,18 @@ impl Driver {
             command = self.commands.recv() => match command {
                 Some(Command::Resolve { call_id, decision }) => {
                     Input::PolicyDecided { call_id, decision, by: Approver::Human }
+                }
+                Some(Command::ApproveEdited { call_id, input }) => {
+                    // Auch von Menschen geänderte Argumente müssen zum Schema des Tools passen.
+                    let name = self.state.pending_call(call_id).map(|pending| pending.call.name.clone());
+                    let tool = name.and_then(|name| self.agent.tools.get(&name));
+                    let valid = tool.is_some_and(|tool| can_core::schema::validate(&tool.spec().input_schema.0, &input).is_ok());
+                    if valid {
+                        Input::ApprovedWithEdit { call_id, input }
+                    } else {
+                        tracing::warn!(%call_id, "geänderte Argumente passen nicht zum Schema; die Rückfrage bleibt offen");
+                        Input::Tick(clock.now())
+                    }
                 }
                 None => Input::Cancel,
             },
@@ -310,23 +326,6 @@ impl Driver {
             ToolRun::Cancelled => Input::Cancel,
             ToolRun::Deadline => Input::Tick(self.agent.clock.now()),
         }
-    }
-
-    /// Kürzt eine zu große Ausgabe für das Modell. Die volle Ausgabe geht als Blob in den Store;
-    /// das Ergebnis nennt ihre Inhaltsadresse.
-    async fn shorten(&self, output: ToolOutput, max_bytes: usize) -> ToolOutput {
-        if exec::text_bytes(&output) <= max_bytes {
-            return output;
-        }
-        let full = self.agent.redactor.text(&output.as_text()).into_bytes();
-        let size = full.len();
-        let mut shortened = exec::truncate(output, max_bytes);
-        let note = match self.agent.store.put_blob(full).await {
-            Ok(digest) => format!("\n[Volle Ausgabe: {size} Bytes, im Store als Blob {digest}]"),
-            Err(error) => format!("\n[Volle Ausgabe: {size} Bytes, nicht gespeichert: {error}]"),
-        };
-        shortened.0.push(can_core::OutputBlock::Text(note));
-        shortened
     }
 
     /// Das Arbeitsverzeichnis für Tools dieser Sitzung; bei getrennten Verzeichnissen wird es

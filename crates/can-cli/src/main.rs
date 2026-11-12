@@ -8,10 +8,10 @@ use can_cli::config::ProviderKind;
 use can_cli::eval::{Suite, run_suite};
 use can_cli::inspect::inspect;
 use can_cli::{
-    App, CliError, Config, Options, Terminal, build_app, chat_turn, open_store, resume_turn,
-    user_message,
+    Answer, App, CliError, Config, Options, Terminal, build_app, chat_turn, open_store,
+    resume_turn, user_message,
 };
-use can_core::{Decision, FinishReason, SessionId, ToolCall};
+use can_core::{FinishReason, SessionId, ToolCall};
 use can_runtime::Outcome;
 use clap::{Args, Parser, Subcommand};
 
@@ -104,6 +104,15 @@ enum Command {
         #[command(flatten)]
         common: Common,
     },
+    /// Verzweigt eine Sitzung: eine neue übernimmt den Verlauf bis zu einer Position.
+    Fork {
+        session: SessionId,
+        /// Letzte Position, die übernommen wird (siehe `can inspect`).
+        #[arg(long)]
+        at: u64,
+        #[command(flatten)]
+        common: Common,
+    },
     /// Zeigt den Verlauf einer Sitzung als Zeitleiste aus dem Store.
     Inspect {
         session: SessionId,
@@ -120,19 +129,31 @@ enum Command {
 }
 
 /// Fragt im Terminal nach, ob ein Tool-Aufruf ausgeführt werden darf.
-fn ask_user(call: &ToolCall) -> Decision {
-    eprint!("Tool {} mit {} ausführen? [j/N] ", call.name, call.input);
+fn ask_user(call: &ToolCall) -> Answer {
+    eprint!(
+        "Tool {} mit {} ausführen? [j/N/e = Argumente ändern] ",
+        call.name, call.input
+    );
     let mut answer = String::new();
-    match std::io::stdin().lock().read_line(&mut answer) {
-        Ok(_)
-            if matches!(
-                answer.trim().to_lowercase().as_str(),
-                "j" | "ja" | "y" | "yes"
-            ) =>
-        {
-            Decision::Allow
+    if std::io::stdin().lock().read_line(&mut answer).is_err() {
+        return Answer::Deny;
+    }
+    match answer.trim().to_lowercase().as_str() {
+        "j" | "ja" | "y" | "yes" => Answer::Allow,
+        "e" => {
+            eprint!("Neue Argumente als JSON: ");
+            let mut line = String::new();
+            let parsed = std::io::stdin()
+                .lock()
+                .read_line(&mut line)
+                .ok()
+                .and_then(|_| serde_json::from_str(line.trim()).ok());
+            parsed.map(Answer::Edit).unwrap_or_else(|| {
+                eprintln!("Kein gültiges JSON; Aufruf abgelehnt.");
+                Answer::Deny
+            })
         }
-        _ => Decision::Deny,
+        _ => Answer::Deny,
     }
 }
 
@@ -187,6 +208,16 @@ async fn run(command: Command) -> Result<(), CliError> {
             image,
             common,
         } => chat(common.app().await?, session, prompt, image).await,
+        Command::Fork {
+            session,
+            at,
+            common,
+        } => {
+            let app = common.app().await?;
+            let fork = app.agent.fork(session, at).await?;
+            println!("{fork}");
+            Ok(())
+        }
         Command::Inspect { session, common } => {
             let store = open_store(&common.options()?)?;
             inspect(store.as_ref(), session, &mut std::io::stdout()).await

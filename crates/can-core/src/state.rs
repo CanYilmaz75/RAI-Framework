@@ -91,6 +91,9 @@ pub enum CallStatus {
 pub struct PendingCall {
     pub call: ToolCall,
     pub status: CallStatus,
+    /// Hat ein Mensch die Argumente bei der Freigabe geändert?
+    #[serde(default)]
+    pub edited: bool,
 }
 
 impl PendingCall {
@@ -137,6 +140,9 @@ pub struct RunState {
     /// Hat ein als vertraulich markiertes Tool in dieser Sitzung Daten geliefert?
     #[serde(default)]
     pub confidential_seen: bool,
+    /// Aktueller Plan des Agenten, zuletzt geschrieben über das Planungs-Tool.
+    #[serde(default)]
+    pub plan: Vec<crate::event::Todo>,
 }
 
 impl RunState {
@@ -157,6 +163,7 @@ impl RunState {
             next_seq: 0,
             finish: None,
             confidential_seen: false,
+            plan: Vec::new(),
         }
     }
 
@@ -210,6 +217,7 @@ impl RunState {
                 self.pending.push(PendingCall {
                     call: call.clone(),
                     status: CallStatus::Requested,
+                    edited: false,
                 });
                 self.phase = Phase::AwaitPolicy;
             }
@@ -265,6 +273,17 @@ impl RunState {
                     up_to_seq: *up_to_seq,
                     summary: summary.clone(),
                 });
+            }
+            Event::PlanUpdated { todos } => self.plan = todos.clone(),
+            Event::ToolArgsEdited { call_id, input } => {
+                if let Some(pending) = self
+                    .pending
+                    .iter_mut()
+                    .find(|pending| pending.call.id == *call_id)
+                {
+                    pending.call.input = input.clone();
+                    pending.edited = true;
+                }
             }
             Event::TextDelta { .. } => {}
         }

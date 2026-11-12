@@ -206,3 +206,42 @@ memory_mb = 256
         .unwrap();
     assert!(error.to_string().contains("genau eines"));
 }
+
+#[tokio::test]
+async fn coding_tools_memory_and_skills_come_from_the_config() {
+    let dir = std::env::temp_dir().join(format!("can-server-skills-{}", SessionId::new()));
+    std::fs::create_dir_all(dir.join("skills/release")).unwrap();
+    std::fs::write(dir.join("AGENTS.md"), "Antworte auf Deutsch.").unwrap();
+    std::fs::write(
+        dir.join("skills/release/SKILL.md"),
+        "---\nname: release\ndescription: Versionen\n---\nErst testen.",
+    )
+    .unwrap();
+    let text = format!(
+        "[[agents]]\nname = \"coder\"\nmodel = \"m\"\nsystem = \"Du programmierst.\"\n\
+         tools = [\"read_file\", \"edit_file\", \"ls\", \"glob\", \"grep\", \"write_todos\"]\n\
+         memory_file = \"{0}/AGENTS.md\"\nskills_dir = \"{0}/skills\"\n",
+        dir.display()
+    );
+    let config = ServerConfig::parse(&text).unwrap();
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    let agents = config.agents(&store, env).await.unwrap();
+    let agent = agents["coder"].config();
+    let tools: Vec<&str> = agent.tools.iter().map(|spec| spec.name.as_str()).collect();
+    assert_eq!(
+        tools,
+        [
+            "edit_file",
+            "glob",
+            "grep",
+            "load_skill",
+            "ls",
+            "read_file",
+            "write_todos"
+        ]
+    );
+    let system = agent.system.as_deref().unwrap();
+    assert!(system.starts_with("Du programmierst.") && system.contains("Antworte auf Deutsch."));
+    assert!(system.contains("- release: Versionen") && !system.contains("Erst testen."));
+    std::fs::remove_dir_all(dir).unwrap();
+}

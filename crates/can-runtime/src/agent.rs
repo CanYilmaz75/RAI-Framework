@@ -60,6 +60,11 @@ impl Agent {
         &self.inner.config
     }
 
+    /// Der Store, in dem die Sitzungen dieses Agenten liegen.
+    pub fn store(&self) -> &Arc<dyn Store> {
+        &self.inner.store
+    }
+
     /// Startet einen neuen Lauf in der Sitzung und liefert den Event-Strom.
     pub async fn run(
         &self,

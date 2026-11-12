@@ -6,10 +6,13 @@ pub mod context;
 mod driver;
 mod driver_model;
 mod exec;
+mod fork;
 pub mod redact;
 pub mod registry;
 pub mod run;
 pub mod step;
+mod step_plan;
+mod step_types;
 mod structured;
 pub mod subagent;
 
