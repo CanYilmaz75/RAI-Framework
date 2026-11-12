@@ -118,8 +118,10 @@ impl HttpFetch {
             )));
         }
         let address = addresses
-            .first()
+            .iter()
+            .find(|address| address.is_ipv4())
             .copied()
+            .or_else(|| addresses.first().copied())
             .ok_or_else(|| for_model(format!("Host {host} hat keine Adresse.")))?;
         Ok((host, address))
     }
