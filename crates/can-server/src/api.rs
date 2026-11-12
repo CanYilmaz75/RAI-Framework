@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use crate::App;
 use crate::auth::{Principal, Role};
 use crate::meta::{SessionMeta, SessionStatus};
+use crate::runs::MessageMode;
 
 /// Fehlerantwort: Status und Meldung als JSON.
 pub struct ApiError(pub StatusCode, pub String);
@@ -74,9 +75,10 @@ pub(crate) async fn session_of(
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "Sitzung nicht gefunden."))
 }
 
-fn check_quota(app: &App, principal: &Principal) -> Result<(), ApiError> {
+/// Prüft die Kontingente des Mandanten. `new_run` zählt einen zusätzlichen gleichzeitigen Lauf.
+fn check_quota(app: &App, principal: &Principal, new_run: bool) -> Result<(), ApiError> {
     let quota = app.directory.quota(&principal.tenant);
-    if app.runs.running_for(&principal.tenant) >= quota.max_concurrent_runs {
+    if new_run && app.runs.running_for(&principal.tenant) >= quota.max_concurrent_runs {
         return Err(error(
             StatusCode::TOO_MANY_REQUESTS,
             "Zu viele gleichzeitige Läufe für diesen Mandanten.",
@@ -133,7 +135,7 @@ pub async fn create_session(
             format!("Unbekannter Agent: {}", body.agent),
         ));
     }
-    check_quota(&app, &principal)?;
+    check_quota(&app, &principal, true)?;
     let idempotency_key = headers
         .get("idempotency-key")
         .and_then(|value| value.to_str().ok())
@@ -176,6 +178,9 @@ pub async fn create_session(
 #[serde(deny_unknown_fields)]
 pub struct PostMessage {
     input: String,
+    /// Was geschieht, wenn in der Sitzung schon ein Lauf unterwegs ist.
+    #[serde(default)]
+    mode: MessageMode,
 }
 
 pub async fn post_message(
@@ -183,15 +188,21 @@ pub async fn post_message(
     principal: Principal,
     Path(id): Path<SessionId>,
     Json(body): Json<PostMessage>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Response, ApiError> {
     require(&principal, Role::Operator)?;
     let meta = session_of(&app, &principal, id).await?;
-    check_quota(&app, &principal)?;
-    app.runs
-        .start(&meta, Message::user(body.input))
+    // Ein neuer gleichzeitiger Lauf entsteht nur, wenn in der Sitzung gerade keiner läuft.
+    check_quota(&app, &principal, app.runs.live(id).is_none())?;
+    let delivery = app
+        .runs
+        .post(&meta, Message::user(body.input), body.mode)
         .await
         .map_err(run_error)?;
-    Ok(StatusCode::ACCEPTED)
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"delivery": delivery, "queued": app.runs.queued(id)})),
+    )
+        .into_response())
 }
 
 pub async fn list_sessions(

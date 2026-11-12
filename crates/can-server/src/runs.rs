@@ -1,6 +1,6 @@
 //! Verwaltung der laufenden Läufe: starten, fortsetzen, Events verteilen, Freigaben sammeln.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use can_core::{
@@ -9,7 +9,7 @@ use can_core::{
 };
 use can_runtime::{Agent, Run, RunController, RunError};
 use serde::Serialize;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::meta::{SessionDirectory, SessionMeta, SessionStatus};
 use crate::metrics::Metrics;
@@ -49,6 +49,10 @@ pub struct RunManager {
     /// Adresse je Mandant, die nach jedem Lauf benachrichtigt wird.
     pub webhooks: HashMap<String, String>,
     live: Mutex<HashMap<SessionId, Arc<Live>>>,
+    /// Startet Läufe für eingereihte Nachrichten.
+    restart: mpsc::UnboundedSender<(SessionMeta, Message)>,
+    /// Nachrichten, die auf das Ende des laufenden Laufs ihrer Sitzung warten.
+    queued: Mutex<HashMap<SessionId, VecDeque<Message>>>,
 }
 
 fn reason_label(reason: &FinishReason) -> &'static str {
@@ -77,7 +81,8 @@ impl RunManager {
         prices: HashMap<String, Pricing>,
         webhooks: HashMap<String, String>,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        let (restart, mut pending) = mpsc::unbounded_channel::<(SessionMeta, Message)>();
+        let manager = Arc::new(Self {
             agents,
             store,
             directory,
@@ -85,7 +90,21 @@ impl RunManager {
             prices,
             webhooks,
             live: Mutex::new(HashMap::new()),
-        })
+            queued: Mutex::new(HashMap::new()),
+            restart,
+        });
+        let weak = Arc::downgrade(&manager);
+        tokio::spawn(async move {
+            while let Some((meta, message)) = pending.recv().await {
+                let Some(manager) = weak.upgrade() else {
+                    return;
+                };
+                if let Err(error) = manager.start(&meta, message).await {
+                    tracing::error!(session = %meta.id, %error, "eingereihte Nachricht nicht gestartet");
+                }
+            }
+        });
+        manager
     }
 
     /// Meldet das Ende eines Laufs an den Webhook des Mandanten, ohne darauf zu warten.
@@ -355,5 +374,99 @@ impl RunManager {
             }
         };
         let _ = self.directory.set_status(meta.id, status).await;
+        // Wartet eine Nachricht, startet mit ihr der nächste Lauf.
+        let next = self
+            .queued
+            .lock()
+            .ok()
+            .and_then(|mut queued| queued.get_mut(&meta.id).and_then(VecDeque::pop_front));
+        if let Some(message) = next {
+            // Über einen Kanal statt direkt: sonst riefe der Lauf sich selbst rekursiv auf.
+            let _ = self.restart.send((meta, message));
+        }
     }
+
+    /// Nimmt eine Nachricht an die Sitzung entgegen und behandelt sie je nach `mode`, falls dort
+    /// gerade ein Lauf unterwegs ist.
+    pub async fn post(
+        self: &Arc<Self>,
+        meta: &SessionMeta,
+        message: Message,
+        mode: MessageMode,
+    ) -> Result<Delivery, RunError> {
+        let live = self.live(meta.id);
+        let waiting = self
+            .queued
+            .lock()
+            .map(|queued| queued.get(&meta.id).is_some_and(|q| !q.is_empty()))
+            .unwrap_or(false);
+        let enqueue = |front: bool| {
+            if let Ok(mut queued) = self.queued.lock() {
+                let queue = queued.entry(meta.id).or_default();
+                if front {
+                    queue.push_front(message.clone())
+                } else {
+                    queue.push_back(message.clone())
+                }
+            }
+        };
+        match (mode, live) {
+            (MessageMode::Inject, Some(live)) => {
+                live.controller.inject(message.clone()).await?;
+                Ok(Delivery::Injected)
+            }
+            (MessageMode::Interrupt, Some(live)) => {
+                enqueue(true);
+                live.controller.cancel();
+                Ok(Delivery::Interrupting)
+            }
+            (MessageMode::Queue, Some(_)) => {
+                enqueue(false);
+                Ok(Delivery::Queued)
+            }
+            (MessageMode::Reject, Some(_)) => Err(RunError::Interrupted),
+            // Kein Lauf hier, aber schon Nachrichten in der Schlange: hinten anstellen.
+            (_, None) if waiting && mode != MessageMode::Reject => {
+                enqueue(false);
+                Ok(Delivery::Queued)
+            }
+            (_, None) => {
+                self.start(meta, message).await?;
+                Ok(Delivery::Started)
+            }
+        }
+    }
+
+    /// Zahl der Nachrichten, die in der Sitzung warten.
+    pub fn queued(&self, session: SessionId) -> usize {
+        self.queued
+            .lock()
+            .map(|queued| queued.get(&session).map_or(0, VecDeque::len))
+            .unwrap_or(0)
+    }
+}
+
+/// Was mit einer Nachricht geschieht, wenn in der Sitzung schon ein Lauf unterwegs ist.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageMode {
+    /// Ablehnen (Vorgabe).
+    #[default]
+    Reject,
+    /// Hinten anstellen; ein neuer Lauf startet, wenn der laufende endet.
+    Queue,
+    /// In den laufenden Lauf schieben; er berücksichtigt sie vor der nächsten Modellanfrage.
+    Inject,
+    /// Den laufenden Lauf abbrechen und mit dieser Nachricht neu beginnen.
+    Interrupt,
+}
+
+/// Was mit der Nachricht geschehen ist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    Started,
+    Queued,
+    Injected,
+    Interrupting,
 }
