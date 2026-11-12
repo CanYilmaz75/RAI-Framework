@@ -173,6 +173,11 @@ pub enum Event {
         up_to_seq: u64,
         summary: Message,
     },
+    /// Eine Nachricht kam während des laufenden Laufs dazu. Sie geht vor der nächsten
+    /// Modellanfrage in den Verlauf, ohne einen Tool-Aufruf von seinem Ergebnis zu trennen.
+    MessageInjected {
+        message: Message,
+    },
     /// Der Plan der Sitzung wurde neu geschrieben.
     PlanUpdated {
         todos: Vec<Todo>,
@@ -206,6 +211,7 @@ impl Event {
             Event::ToolStarted { .. } => "tool_started",
             Event::ToolFinished { .. } => "tool_finished",
             Event::Compacted { .. } => "compacted",
+            Event::MessageInjected { .. } => "message_injected",
             Event::PlanUpdated { .. } => "plan_updated",
             Event::ToolArgsEdited { .. } => "tool_args_edited",
             Event::RunFinished { .. } => "run_finished",
@@ -262,6 +268,9 @@ mod tests {
             Event::Compacted {
                 up_to_seq: 9,
                 summary: Message::assistant("kurz"),
+            },
+            Event::MessageInjected {
+                message: Message::user("noch etwas"),
             },
             Event::PlanUpdated {
                 todos: vec![Todo {

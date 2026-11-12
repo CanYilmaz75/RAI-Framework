@@ -130,6 +130,7 @@ pub fn step(state: &RunState, input: Input) -> Step {
             em.tool_error(call_id, &message);
             em.finish(FinishReason::Error { message });
         }
+        (_, Input::Inject(message)) if running => em.emit(Event::MessageInjected { message }),
         (_, Input::Cancel) if running => em.finish(FinishReason::Cancelled),
         (_, Input::Tick(now))
             if running && state.deadline().is_some_and(|deadline| now >= deadline) =>
@@ -214,6 +215,8 @@ impl Emitter {
     fn model_done(&mut self, message: Message, usage: Usage, stop: StopReason) {
         let calls = message.tool_uses();
         let limits = self.state.config.limits.clone();
+        // Kam während der Antwort eine Nachricht dazu, ist der Lauf noch nicht fertig.
+        let more_input = !self.state.injected.is_empty();
         self.emit(Event::ModelResponded {
             step: self.state.step,
             message,
@@ -224,6 +227,8 @@ impl Emitter {
             self.finish(FinishReason::LimitReached {
                 limit: LimitKind::Tokens,
             });
+        } else if calls.is_empty() && more_input {
+            self.request_model();
         } else if calls.is_empty() {
             self.finish(FinishReason::Completed);
         } else if calls.len() > limits.max_tool_calls_per_step as usize {

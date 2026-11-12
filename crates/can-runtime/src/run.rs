@@ -1,6 +1,6 @@
 //! Handle auf einen laufenden Lauf: Event-Strom, Freigaben, Abbruch und Ergebnis.
 
-use can_core::{CallId, Decision, Envelope, FinishReason, StoreError, Usage};
+use can_core::{CallId, Decision, Envelope, FinishReason, Message, StoreError, Usage};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -45,6 +45,7 @@ pub(crate) enum Command {
         call_id: CallId,
         input: serde_json::Value,
     },
+    Inject(Message),
 }
 
 /// Steuerung eines Laufs, getrennt vom Event-Strom und frei kopierbar: so kann eine Stelle
@@ -73,6 +74,15 @@ impl RunController {
     ) -> Result<(), RunError> {
         self.commands
             .send(Command::ApproveEdited { call_id, input })
+            .await
+            .map_err(|_| RunError::Closed)
+    }
+
+    /// Schiebt eine Nachricht in den laufenden Lauf. Sie geht vor der nächsten Modellanfrage in
+    /// den Verlauf; trennt dabei nie einen Tool-Aufruf von seinem Ergebnis.
+    pub async fn inject(&self, message: impl Into<Message>) -> Result<(), RunError> {
+        self.commands
+            .send(Command::Inject(message.into()))
             .await
             .map_err(|_| RunError::Closed)
     }
@@ -138,6 +148,11 @@ impl Run {
         input: serde_json::Value,
     ) -> Result<(), RunError> {
         self.controller().approve_with(call_id, input).await
+    }
+
+    /// Schiebt eine Nachricht in den laufenden Lauf; siehe [`RunController::inject`].
+    pub async fn inject(&self, message: impl Into<Message>) -> Result<(), RunError> {
+        self.controller().inject(message).await
     }
 
     /// Steuerung, die unabhängig vom Handle weitergegeben werden kann.

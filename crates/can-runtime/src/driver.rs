@@ -72,6 +72,19 @@ impl Driver {
     async fn drive(&mut self, first: Input) -> Result<Outcome, RunError> {
         let mut queue = VecDeque::from([first]);
         loop {
+            // Nachrichten, die während des Laufs kamen, gehen sofort hinein; ebenso Freigaben.
+            while let Ok(command) = self.commands.try_recv() {
+                let input = match command {
+                    Command::Inject(message) => Input::Inject(message),
+                    Command::Resolve { call_id, decision } => Input::PolicyDecided {
+                        call_id,
+                        decision,
+                        by: Approver::Human,
+                    },
+                    Command::ApproveEdited { call_id, input } => self.edited(call_id, input),
+                };
+                queue.push_back(input);
+            }
             let input = match queue.pop_front() {
                 Some(input) => input,
                 None if matches!(self.state.phase, Phase::Done | Phase::Idle) => break,
@@ -94,64 +107,6 @@ impl Driver {
             usage: self.state.usage,
             steps: self.state.step,
         })
-    }
-
-    /// Schwärzt, was von Modell und Tools kommt, bevor die Schrittfunktion daraus Events und
-    /// die nächste Anfrage baut.
-    fn redact(&self, input: Input) -> Input {
-        let redactor = &self.agent.redactor;
-        match input {
-            Input::ModelDone {
-                message,
-                usage,
-                stop,
-            } => {
-                // Der Inhaltsfilter sieht die Antwort, bevor sie in den Verlauf kommt.
-                let blocked = self
-                    .agent
-                    .moderator
-                    .as_ref()
-                    .and_then(|moderator| moderator.check(&message.text()).err());
-                match blocked {
-                    Some(reason) => {
-                        Input::ModelFailed(can_core::ProviderError::InvalidRequest(format!(
-                            "Die Antwort des Modells wurde vom Inhaltsfilter abgelehnt: {reason}"
-                        )))
-                    }
-                    None => Input::ModelDone {
-                        message: redactor.value(message),
-                        usage,
-                        stop,
-                    },
-                }
-            }
-            Input::ToolDone {
-                call_id,
-                output,
-                is_error,
-            } => Input::ToolDone {
-                call_id,
-                output: redactor.value(output),
-                is_error,
-            },
-            Input::ToolRejected { call_id, message } => Input::ToolRejected {
-                call_id,
-                message: redactor.text(&message),
-            },
-            Input::ToolFatal { call_id, message } => Input::ToolFatal {
-                call_id,
-                message: redactor.text(&message),
-            },
-            Input::Compacted { up_to_seq, summary } => Input::Compacted {
-                up_to_seq,
-                summary: redactor.value(summary),
-            },
-            Input::ApprovedWithEdit { call_id, input } => Input::ApprovedWithEdit {
-                call_id,
-                input: redactor.value(input),
-            },
-            other => other,
-        }
     }
 
     /// Speichert die Events, bevor irgendeine weitere Wirkung nach außen passiert.
@@ -194,18 +149,8 @@ impl Driver {
                 Some(Command::Resolve { call_id, decision }) => {
                     Input::PolicyDecided { call_id, decision, by: Approver::Human }
                 }
-                Some(Command::ApproveEdited { call_id, input }) => {
-                    // Auch von Menschen geänderte Argumente müssen zum Schema des Tools passen.
-                    let name = self.state.pending_call(call_id).map(|pending| pending.call.name.clone());
-                    let tool = name.and_then(|name| self.agent.tools.get(&name));
-                    let valid = tool.is_some_and(|tool| can_core::schema::validate(&tool.spec().input_schema.0, &input).is_ok());
-                    if valid {
-                        Input::ApprovedWithEdit { call_id, input }
-                    } else {
-                        tracing::warn!(%call_id, "geänderte Argumente passen nicht zum Schema; die Rückfrage bleibt offen");
-                        Input::Tick(clock.now())
-                    }
-                }
+                Some(Command::Inject(message)) => Input::Inject(message),
+                Some(Command::ApproveEdited { call_id, input }) => self.edited(call_id, input),
                 None => Input::Cancel,
             },
             _ = clock.sleep(remaining) => Input::Tick(clock.now()),

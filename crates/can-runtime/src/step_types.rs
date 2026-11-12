@@ -44,12 +44,14 @@ pub enum Input {
         call_id: CallId,
         message: String,
     },
-    /// Die Zusammenfassung des Verlaufs bis `up_to_seq` liegt vor.
     /// Ein Mensch gibt den Aufruf frei, aber mit geänderten Argumenten.
     ApprovedWithEdit {
         call_id: CallId,
         input: serde_json::Value,
     },
+    /// Eine Nachricht, die während des Laufs dazukommt.
+    Inject(Message),
+    /// Die Zusammenfassung des Verlaufs bis `up_to_seq` liegt vor.
     Compacted {
         up_to_seq: u64,
         summary: Message,

@@ -246,3 +246,37 @@ fn resume_handles_every_started_tool() {
     );
     assert_eq!(resumed.effects, vec![Effect::RunTool(calls[0].clone())]);
 }
+
+#[test]
+fn a_message_during_the_model_call_waits_and_keeps_the_run_going() {
+    let mut state = RunState::new(config());
+    drive(&mut state, Input::Start(Message::user("erste Frage")));
+    // Die Modellanfrage läuft; jetzt kommt eine Nachricht dazu.
+    let injected = drive(&mut state, Input::Inject(Message::user("und noch etwas")));
+    assert_eq!(kinds(&injected), ["message_injected"]);
+    assert!(injected.effects.is_empty());
+    assert_eq!(
+        state.injected.len(),
+        1,
+        "sie wartet hinter der laufenden Antwort"
+    );
+    assert_eq!(state.messages.len(), 1);
+
+    // Die Antwort ohne Tool-Aufruf beendet den Lauf nicht: die neue Nachricht verlangt eine Antwort.
+    let answered = drive(&mut state, model_done(&[], 1));
+    assert_eq!(kinds(&answered), ["model_responded", "model_requested"]);
+    let [Effect::CallModel(request)] = answered.effects.as_slice() else {
+        panic!("kein CallModel")
+    };
+    let texts: Vec<String> = request.messages.iter().map(Message::text).collect();
+    assert_eq!(texts, ["erste Frage", "text", "und noch etwas"]);
+    assert!(state.injected.is_empty());
+
+    // Außerhalb eines Laufs passiert nichts.
+    drive(&mut state, model_done(&[], 1));
+    assert_eq!(state.phase, Phase::Done);
+    assert_eq!(
+        step(&state, Input::Inject(Message::user("x"))),
+        Step::default()
+    );
+}

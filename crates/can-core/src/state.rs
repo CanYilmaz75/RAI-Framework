@@ -143,6 +143,10 @@ pub struct RunState {
     /// Aktueller Plan des Agenten, zuletzt geschrieben über das Planungs-Tool.
     #[serde(default)]
     pub plan: Vec<crate::event::Todo>,
+    /// Während des Laufs eingeschobene Nachrichten, die auf eine sichere Stelle im Verlauf
+    /// warten: hinter die laufende Modellantwort oder hinter die Tool-Ergebnisse.
+    #[serde(default)]
+    pub injected: Vec<(u64, Message)>,
 }
 
 impl RunState {
@@ -164,6 +168,7 @@ impl RunState {
             finish: None,
             confidential_seen: false,
             plan: Vec::new(),
+            injected: Vec::new(),
         }
     }
 
@@ -212,6 +217,16 @@ impl RunState {
             Event::ModelResponded { message, usage, .. } => {
                 self.push_message(message.clone(), seq);
                 self.usage.add(*usage);
+                if message.tool_uses().is_empty() {
+                    self.flush_injected();
+                }
+            }
+            Event::MessageInjected { message } => {
+                if self.phase == Phase::AwaitModel || !self.pending.is_empty() {
+                    self.injected.push((seq, message.clone()));
+                } else {
+                    self.push_message(message.clone(), seq);
+                }
             }
             Event::ToolRequested { call } => {
                 self.pending.push(PendingCall {
@@ -265,6 +280,7 @@ impl RunState {
             }
             Event::RunFinished { reason } => {
                 self.close_pending(seq);
+                self.flush_injected();
                 self.phase = Phase::Done;
                 self.finish = Some(reason.clone());
             }
@@ -342,6 +358,13 @@ impl RunState {
     }
 
     /// Schreibt für jeden offenen Aufruf ein Ergebnis in den Verlauf, damit dieser gültig bleibt.
+    /// Gibt die eingeschobenen Nachrichten in den Verlauf, sobald das gefahrlos geht.
+    fn flush_injected(&mut self) {
+        for (seq, message) in std::mem::take(&mut self.injected) {
+            self.push_message(message, seq);
+        }
+    }
+
     fn close_pending(&mut self, seq: u64) {
         if self.pending.is_empty() {
             return;
@@ -371,6 +394,7 @@ impl RunState {
             },
             seq,
         );
+        self.flush_injected();
     }
 }
 
