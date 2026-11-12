@@ -53,6 +53,13 @@ pub trait Store: Send + Sync {
 
     /// Gibt die Sperre frei, falls `owner` sie hält.
     async fn release(&self, id: SessionId, owner: &str) -> Result<(), StoreError>;
+
+    /// Prüft, ob das Log der Sitzung seit dem Schreiben verändert wurde. Liefert die erste
+    /// Position, an der die Hash-Kette nicht stimmt; `None` heißt unversehrt. Stores ohne
+    /// Kette melden immer `None`.
+    async fn verify(&self, _id: SessionId) -> Result<Option<u64>, StoreError> {
+        Ok(None)
+    }
 }
 
 /// Ablaufzeitpunkt einer Sperre.

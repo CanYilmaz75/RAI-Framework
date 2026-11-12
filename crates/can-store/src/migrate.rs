@@ -3,7 +3,8 @@
 use rusqlite::Connection;
 
 /// Jede Migration hebt die Version um eins; neue kommen ans Ende.
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
 CREATE TABLE sessions (
   id          TEXT PRIMARY KEY,
   created_at  INTEGER NOT NULL,
@@ -25,7 +26,9 @@ CREATE TABLE blobs (
   digest TEXT PRIMARY KEY,        -- Inhaltsadresse
   bytes  BLOB NOT NULL
 );
-"];
+",
+    "ALTER TABLE events ADD COLUMN chain TEXT;",
+];
 
 /// Stellt WAL-Modus und volle Synchronisierung ein und bringt das Schema auf den neuesten Stand.
 pub(crate) fn prepare(connection: &mut Connection) -> rusqlite::Result<()> {
