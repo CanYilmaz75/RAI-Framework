@@ -150,6 +150,18 @@ impl SessionDirectory for PostgresDirectory {
             .map(|_| ())
             .map_err(failed)
     }
+
+    async fn delete(&self, id: SessionId) -> Result<(), MetaError> {
+        let client = self.client.lock().await;
+        client
+            .execute(
+                "DELETE FROM can_session_meta WHERE id = $1",
+                &[&id.to_string()],
+            )
+            .await
+            .map(|_| ())
+            .map_err(failed)
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +221,8 @@ mod tests {
             .map(|m| m.id)
             .collect();
         assert_eq!(running, vec![other.id]);
+        directory.delete(other.id).await.unwrap();
+        assert_eq!(directory.get(other.id).await.unwrap(), None);
         // Eine zweite Verbindung sieht dasselbe.
         let second = PostgresDirectory::connect(&url).await.unwrap();
         assert_eq!(

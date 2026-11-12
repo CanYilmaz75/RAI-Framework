@@ -1,0 +1,31 @@
+[package]
+name = "can"
+description = "Fassade: die öffentliche API von Can in einem Crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+openai = ["can-providers/openai"]
+anthropic = ["can-providers/anthropic"]
+sqlite = ["can-store/sqlite"]
+postgres = ["can-store/postgres"]
+http = ["can-tools/http"]
+mcp = ["can-tools/mcp"]
+
+[dependencies]
+can-core.workspace = true
+can-macros.workspace = true
+can-providers.workspace = true
+can-runtime.workspace = true
+can-store.workspace = true
+can-tools.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

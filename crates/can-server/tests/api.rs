@@ -159,3 +159,36 @@ async fn tenants_cannot_see_each_other() {
         1
     );
 }
+
+/// Die OpenAPI-Beschreibung nennt jede Route, die der Dienst unter /v1 anbietet.
+#[tokio::test]
+async fn openapi_document_is_served_and_covers_the_routes() {
+    let server = serve(FakeProvider::new()).await;
+    let response = Client::new()
+        .get(format!("{}/openapi.json", server.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["content-type"], "application/json");
+    let document: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(document["openapi"], "3.1.0");
+    let paths = document["paths"].as_object().unwrap();
+    for path in [
+        "/v1/agents",
+        "/v1/sessions",
+        "/v1/sessions/{id}",
+        "/v1/sessions/{id}/messages",
+        "/v1/sessions/{id}/events",
+        "/v1/sessions/{id}/log",
+        "/v1/sessions/{id}/verify",
+        "/v1/sessions/{id}/cancel",
+        "/v1/sessions/{id}/resume",
+        "/v1/sessions/{id}/approvals/{call_id}",
+        "/v1/approvals",
+        "/healthz",
+        "/metrics",
+    ] {
+        assert!(paths.contains_key(path), "{path} fehlt in der Beschreibung");
+    }
+    assert!(paths["/v1/sessions/{id}"]["delete"].is_object());
+}

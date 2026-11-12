@@ -9,6 +9,7 @@ struct Options {
     name: Option<String>,
     effect: syn::Ident,
     idempotent: bool,
+    confidential: bool,
     timeout_secs: u64,
 }
 
@@ -17,11 +18,14 @@ fn parse_options(attr: TokenStream) -> syn::Result<Options> {
         name: None,
         effect: syn::Ident::new("Write", Span::call_site()),
         idempotent: false,
+        confidential: false,
         timeout_secs: 60,
     };
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("idempotent") {
             options.idempotent = true;
+        } else if meta.path.is_ident("confidential") {
+            options.confidential = true;
         } else if meta.path.is_ident("effect") {
             let value: LitStr = meta.value()?.parse()?;
             let variant = match value.value().as_str() {
@@ -43,9 +47,9 @@ fn parse_options(attr: TokenStream) -> syn::Result<Options> {
             let value: LitStr = meta.value()?.parse()?;
             options.name = Some(value.value());
         } else {
-            return Err(
-                meta.error("unbekanntes Attribut; erlaubt: effect, idempotent, timeout, name")
-            );
+            return Err(meta.error(
+                "unbekanntes Attribut; erlaubt: effect, idempotent, confidential, timeout, name",
+            ));
         }
         Ok(())
     });
@@ -127,6 +131,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
     }
     let effect = &options.effect;
     let idempotent = options.idempotent;
+    let confidential = options.confidential;
     let timeout_secs = options.timeout_secs;
     let keys: Vec<String> = names.iter().map(|name| name.to_string()).collect();
     let required: Vec<bool> = types.iter().map(|ty| !is_option(ty)).collect();
@@ -162,6 +167,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
                     ::can_core::ToolSpec::new(#tool_name, #text, schema)
                         .with_effect(::can_core::Effect::#effect)
                         .with_idempotent(#idempotent)
+                        .with_confidential(#confidential)
                         .with_timeout(::std::time::Duration::from_secs(#timeout_secs))
                 })
             }

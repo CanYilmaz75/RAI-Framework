@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use can_core::{
-    CallId, Decision, Envelope, Event, FinishReason, Message, SessionId, Store, StoreError,
-    ToolCall,
+    CallId, Decision, Envelope, Event, FinishReason, Message, Pricing, SessionId, Store,
+    StoreError, ToolCall,
 };
 use can_runtime::{Agent, Run, RunController, RunError};
 use serde::Serialize;
@@ -44,6 +44,10 @@ pub struct RunManager {
     pub store: Arc<dyn Store>,
     pub directory: Arc<dyn SessionDirectory>,
     pub metrics: Arc<Metrics>,
+    /// Preise je Agent; ohne Eintrag kostet ein Lauf nichts.
+    pub prices: HashMap<String, Pricing>,
+    /// Adresse je Mandant, die nach jedem Lauf benachrichtigt wird.
+    pub webhooks: HashMap<String, String>,
     live: Mutex<HashMap<SessionId, Arc<Live>>>,
 }
 
@@ -62,13 +66,48 @@ impl RunManager {
         store: Arc<dyn Store>,
         directory: Arc<dyn SessionDirectory>,
     ) -> Arc<Self> {
+        Self::with(agents, store, directory, HashMap::new(), HashMap::new())
+    }
+
+    /// Wie [`RunManager::new`], mit Preisen je Agent und Webhooks je Mandant.
+    pub fn with(
+        agents: HashMap<String, Agent>,
+        store: Arc<dyn Store>,
+        directory: Arc<dyn SessionDirectory>,
+        prices: HashMap<String, Pricing>,
+        webhooks: HashMap<String, String>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             agents,
             store,
             directory,
             metrics: Arc::new(Metrics::default()),
+            prices,
+            webhooks,
             live: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Meldet das Ende eines Laufs an den Webhook des Mandanten, ohne darauf zu warten.
+    fn notify(&self, meta: &SessionMeta, reason: &str, tokens: u64, cost: f64) {
+        let Some(url) = self.webhooks.get(&meta.tenant).cloned() else {
+            return;
+        };
+        let body = serde_json::json!({
+            "session_id": meta.id, "tenant": meta.tenant, "user": meta.user, "agent": meta.agent,
+            "reason": reason, "tokens": tokens, "cost": cost,
+        });
+        tokio::spawn(async move {
+            let sent = reqwest::Client::new()
+                .post(&url)
+                .header("content-type", "application/json")
+                .body(body.to_string())
+                .send()
+                .await;
+            if let Err(error) = sent {
+                tracing::warn!(%error, "Webhook nicht erreichbar");
+            }
+        });
     }
 
     /// Der Lauf der Sitzung, falls er in diesem Prozess unterwegs ist.
@@ -260,11 +299,15 @@ impl RunManager {
             // Ein anderer Worker führt die Sitzung: sie bleibt als laufend vermerkt.
             (Some(RunError::Store(StoreError::Locked { .. })), _) => return,
             (None, Ok(outcome)) => {
-                self.metrics.run_finished(
-                    reason_label(&outcome.reason),
-                    &meta.tenant,
-                    outcome.usage.total(),
-                );
+                let cost = self
+                    .prices
+                    .get(&meta.agent)
+                    .map(|pricing| pricing.cost(outcome.usage))
+                    .unwrap_or(0.0);
+                let label = reason_label(&outcome.reason);
+                self.metrics
+                    .run_finished(label, &meta.tenant, outcome.usage.total(), cost);
+                self.notify(&meta, label, outcome.usage.total(), cost);
                 if outcome.reason == FinishReason::Completed {
                     SessionStatus::Idle
                 } else {
@@ -273,7 +316,8 @@ impl RunManager {
             }
             (failure, _) => {
                 tracing::error!(session = %meta.id, ?failure, "Lauf endete mit Fehler");
-                self.metrics.run_finished("failed", &meta.tenant, 0);
+                self.metrics.run_finished("failed", &meta.tenant, 0, 0.0);
+                self.notify(&meta, "failed", 0, 0.0);
                 SessionStatus::Stopped
             }
         };

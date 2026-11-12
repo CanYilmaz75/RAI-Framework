@@ -22,6 +22,7 @@ steht unter „Dienst“ weiter unten.
 | `can-store` | `MemoryStore`, `SqliteStore` (Feature `sqlite`) und `PostgresStore` (Feature `postgres`), mit Blobs und Sitzungssperre |
 | `can-macros` | `#[tool]` macht aus einer `async fn` ein Tool samt JSON-Schema |
 | `can-cli` | Binary `can` mit den Befehlen `chat` und `resume` |
+| `can` | Fassade: die öffentliche API in einem Crate |
 | `can-server` | Binary `can-server`: HTTP-API, Event-Strom, Freigaben, Mandanten und Rollen, Web-Oberfläche |
 
 ## Ausprobieren
@@ -82,19 +83,40 @@ Health-Check unter `/healthz`. Alles unter `/v1` verlangt `Authorization: Bearer
 | `GET /v1/sessions/{id}/events` | Event-Strom (SSE); mit `?after=` oder `Last-Event-ID` ab einer Position |
 | `GET /v1/sessions/{id}/log` | gespeicherte Events als JSON |
 | `GET /v1/approvals` | offene Rückfragen des Mandanten |
+| `DELETE /v1/sessions/{id}` | Sitzung samt Log löschen (Rolle `admin`) |
+| `GET /openapi.json` | Beschreibung der API |
 | `POST /v1/sessions/{id}/approvals/{call_id}` | Rückfrage mit `allow` oder `deny` beantworten |
 | `POST /v1/sessions/{id}/cancel`, `.../resume` | Lauf abbrechen oder fortsetzen |
 
 - **Mandanten:** Jede Sitzung gehört einem Mandanten; fremde Sitzungen sehen aus wie nicht vorhanden.
 - **Rollen:** `viewer` liest, `operator` startet Läufe und erteilt Freigaben, `admin` darf alles im Mandanten.
-- **Kontingente:** gleichzeitige Läufe und Token-Budget pro Mandant; darüber antwortet der Dienst mit 429.
+- **Kontingente:** gleichzeitige Läufe, Token- und Kostenbudget pro Mandant; darüber antwortet der Dienst mit 429.
+- **Webhook:** Nach jedem Lauf geht eine Meldung mit Grund, Token und Kosten an die Adresse des Mandanten.
 - **Mehrere Worker:** Mit PostgreSQL teilen sich Worker Store und Sitzungsverzeichnis. Fällt einer aus,
   übernimmt ein anderer dessen Läufe, sobald die Sitzungssperre abgelaufen ist (30 Sekunden).
 - **Container:** Das `Dockerfile` baut ein Image mit `can-server` und `can`.
 
-Was dem Dienst noch fehlt: Anmeldung über SSO, eine Sandbox pro Lauf, Secret-Verwaltung über
-Vault oder KMS, TLS zur Datenbank und ein Verbindungspool. Das Token-Budget zählt pro Prozess
-und beginnt nach einem Neustart bei null.
+### Isolation und Sicherheit
+
+- **Arbeitsverzeichnis pro Sitzung:** Im Dienst arbeitet jede Sitzung in einem eigenen Unterverzeichnis.
+- **Sandbox für `shell`:** `namespaces` (über `unshare`: kein Netzwerk, eigene Prozesstabelle,
+  Grenzen für Speicher, CPU-Zeit und Prozesse) oder `docker` (Wegwerf-Container, nur das
+  Arbeitsverzeichnis eingehängt, Wurzel schreibgeschützt, keine Capabilities). `namespaces` trennt
+  das Dateisystem nicht; dafür ist `docker` gedacht.
+- **Schutz vor Datenabfluss:** Tools lassen sich als vertraulich markieren. Hat eine Sitzung
+  solche Daten gesehen, gilt für jedes externe Tool mindestens `ask` oder `deny`.
+- **Inhaltsfilter:** gesperrte Begriffe in Eingaben und Modellantworten; hinter dem Trait
+  `Moderator` lässt sich ein externer Dienst anschließen.
+- **Verschlüsselung im Ruhezustand:** Events und Blobs in SQLite und PostgreSQL, ChaCha20-Poly1305.
+- **Manipulationssicheres Protokoll:** Jede Zeile trägt ein Glied einer Hash-Kette;
+  `GET /v1/sessions/{id}/verify` meldet die erste veränderte Position.
+- **Secrets:** aus Umgebungsvariablen, eingehängten Dateien oder HashiCorp Vault (KV v2).
+- **MCP:** Server pro Agent in der Konfiguration, HTTP-Server mit Bearer-Token.
+
+Was dem Dienst noch fehlt: Anmeldung über SSO, ein Netzwerk-Proxy für ausgehende Verbindungen,
+ein Schlüssel pro Mandant, TLS zur Datenbank und ein Verbindungspool. Token- und Kostenbudget zählen pro
+Prozess und beginnt nach einem Neustart bei null. Die Docker-Sandbox ist geschrieben, aber
+mangels Docker in der Entwicklungsumgebung nicht ausgeführt worden.
 
 ## Konfigurationsdatei
 
@@ -238,6 +260,31 @@ Das Modell bekommt sie als Fehlerergebnis.
 
 `http_fetch` ruft nur Hosts der Freigabeliste ab. Private und lokale Adressen sind gesperrt, auch
 nach der DNS-Auflösung und nach jeder Weiterleitung.
+
+## Werkzeuge für den Betrieb
+
+```bash
+cargo run -p can-cli -- inspect <kennung>
+```
+
+`inspect` zeigt den Verlauf einer Sitzung als Zeitleiste mit Token, Tool-Dauern und dem Zustand
+der Hash-Kette.
+
+```bash
+cargo run -p can-cli -- eval faelle.toml --replay antworten.jsonl
+```
+
+`eval` lässt Testfälle laufen (`prompt`, `expect_contains`, `expect_not_contains`) und endet mit
+Fehler, wenn einer scheitert. Mit `--replay` kommen die Antworten aus einer Aufzeichnung; so wird
+daraus ein wiederholbarer Regressionstest.
+
+Weitere Bausteine der Bibliothek:
+
+- **`Fallback`:** fällt ein Anbieter aus, übernimmt ein zweiter.
+- **`OpenAiCompat::azure`:** Deployments bei Azure OpenAI.
+- **`Agent::complete_structured`:** Endantwort als JSON, geprüft gegen ein Schema, mit bis zu zwei Korrekturen.
+- **`Pricing`:** Preise je Million Token; der Dienst rechnet damit Kosten und Kostenbudget.
+- **Crate `can`:** Fassade mit `use can::prelude::*;` und Feature-Flags für Anbieter, Stores und Tools.
 
 ## Prüfen
 

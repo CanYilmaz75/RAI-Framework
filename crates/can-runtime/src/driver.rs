@@ -105,11 +105,26 @@ impl Driver {
                 message,
                 usage,
                 stop,
-            } => Input::ModelDone {
-                message: redactor.value(message),
-                usage,
-                stop,
-            },
+            } => {
+                // Der Inhaltsfilter sieht die Antwort, bevor sie in den Verlauf kommt.
+                let blocked = self
+                    .agent
+                    .moderator
+                    .as_ref()
+                    .and_then(|moderator| moderator.check(&message.text()).err());
+                match blocked {
+                    Some(reason) => {
+                        Input::ModelFailed(can_core::ProviderError::InvalidRequest(format!(
+                            "Die Antwort des Modells wurde vom Inhaltsfilter abgelehnt: {reason}"
+                        )))
+                    }
+                    None => Input::ModelDone {
+                        message: redactor.value(message),
+                        usage,
+                        stop,
+                    },
+                }
+            }
             Input::ToolDone {
                 call_id,
                 output,
@@ -223,7 +238,15 @@ impl Driver {
                 message: format!("Ungültige Argumente: {problem}"),
             };
         }
-        let decision = match self.agent.policy.check(call, tool.spec()) {
+        let mut decision = self.agent.policy.check(call, tool.spec());
+        // Schutz vor Datenabfluss: nach vertraulichen Daten wird jedes externe Tool strenger behandelt.
+        if let Some(guard) = self.state.config.exfiltration_guard
+            && self.state.confidential_seen
+            && tool.spec().effect == can_core::Effect::External
+        {
+            decision = decision.max(guard);
+        }
+        let decision = match decision {
             Decision::Ask if !self.interactive => Decision::Deny,
             decision => decision,
         };
@@ -257,10 +280,17 @@ impl Driver {
                 is_error: true,
             };
         };
+        let workdir = match self.session_workdir() {
+            Ok(workdir) => workdir,
+            Err(error) => {
+                let message = format!("Arbeitsverzeichnis der Sitzung nicht nutzbar: {error}");
+                return Input::ToolFatal { call_id, message };
+            }
+        };
         let cx = ToolCtx {
             session: self.session,
             call_id,
-            workdir: self.agent.workdir.clone(),
+            workdir,
             cancel: self.cancel.child_token(),
             clock: self.agent.clock.clone(),
             progress: ProgressSink::noop(),
@@ -297,6 +327,17 @@ impl Driver {
         };
         shortened.0.push(can_core::OutputBlock::Text(note));
         shortened
+    }
+
+    /// Das Arbeitsverzeichnis für Tools dieser Sitzung; bei getrennten Verzeichnissen wird es
+    /// bei Bedarf angelegt.
+    fn session_workdir(&self) -> std::io::Result<std::path::PathBuf> {
+        if !self.agent.isolate_workdir {
+            return Ok(self.agent.workdir.clone());
+        }
+        let own = self.agent.workdir.join(self.session.to_string());
+        std::fs::create_dir_all(&own)?;
+        own.canonicalize()
     }
 
     /// Restzeit bis zum Zeitlimit des Laufs.

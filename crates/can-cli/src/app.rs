@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use can_core::{MemoryStore, Provider, RuleSet, Store};
-use can_providers::{Anthropic, OpenAiCompat, Recording, Retry};
+use can_providers::{Anthropic, FakeProvider, OpenAiCompat, Recording, Retry};
 use can_runtime::{Agent, SystemClock};
 use can_store::SqliteStore;
 use can_tools::{HttpFetch, McpClient, ReadFile, shell, write_file};
@@ -29,6 +29,8 @@ pub struct Options {
     pub db: Option<PathBuf>,
     /// Datei, in die die Modellantworten für ein späteres Replay geschrieben werden.
     pub record: Option<PathBuf>,
+    /// Aufzeichnung, aus der die Modellantworten kommen, statt von einem echten Anbieter.
+    pub replay: Option<PathBuf>,
     pub config: Config,
 }
 
@@ -48,6 +50,9 @@ fn decorate<P: Provider + 'static>(provider: P, record: &Option<PathBuf>) -> Arc
 }
 
 fn provider(options: &Options) -> Result<Arc<dyn Provider>, CliError> {
+    if let Some(path) = &options.replay {
+        return Ok(Arc::new(FakeProvider::from_recording(path)?));
+    }
     let config = &options.config.provider;
     let base_url = options.base_url.clone().or_else(|| config.base_url.clone());
     // Basis-URL und Schlüsselquelle aus Optionen und Datei überlagern die Umgebungsvariablen.
@@ -66,6 +71,17 @@ fn provider(options: &Options) -> Result<Arc<dyn Provider>, CliError> {
     })
 }
 
+/// Öffnet den Store der Sitzungen: die SQLite-Datei aus Optionen oder Konfiguration, sonst den
+/// Arbeitsspeicher.
+pub fn open_store(options: &Options) -> Result<Arc<dyn Store>, CliError> {
+    Ok(
+        match options.db.clone().or_else(|| options.config.db.clone()) {
+            Some(path) => Arc::new(SqliteStore::open(path)?),
+            None => Arc::new(MemoryStore::new()),
+        },
+    )
+}
+
 /// Baut den Agenten. Lesen ist erlaubt; Schreiben, `shell`, HTTP und MCP-Tools fragen nach,
 /// solange keine Regel der Konfiguration etwas anderes sagt.
 pub async fn build_app(options: &Options) -> Result<App, CliError> {
@@ -80,10 +96,7 @@ pub async fn build_app(options: &Options) -> Result<App, CliError> {
             "Kein Modell angegeben: --model, CAN_MODEL oder `model` in can.toml setzen.".to_owned(),
         )
     })?;
-    let store: Arc<dyn Store> = match options.db.clone().or_else(|| config.db.clone()) {
-        Some(path) => Arc::new(SqliteStore::open(path)?),
-        None => Arc::new(MemoryStore::new()),
-    };
+    let store = open_store(options)?;
     let mut policy = RuleSet::safe_defaults();
     policy.rules.extend(config.policy.rules.iter().cloned());
     let system = options.system.clone().or_else(|| config.system.clone());

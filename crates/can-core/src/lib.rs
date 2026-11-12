@@ -8,6 +8,7 @@ pub mod clock;
 pub mod event;
 pub mod ids;
 pub mod message;
+pub mod moderation;
 pub mod policy;
 pub mod provider;
 pub mod rules;
@@ -24,7 +25,10 @@ pub use event::{
     Timestamp, ToolCall,
 };
 pub use ids::{CallId, IdError, RunId, SessionId};
-pub use message::{Bytes, ContentBlock, Message, OutputBlock, Role, StopReason, ToolOutput, Usage};
+pub use message::{
+    Bytes, ContentBlock, Message, OutputBlock, Pricing, Role, StopReason, ToolOutput, Usage,
+};
+pub use moderation::{BlockList, Moderator};
 pub use policy::{AllowAll, ByEffect, DenyAll, Policy};
 pub use provider::{
     BoxError, Capabilities, Chunk, Provider, ProviderError, ProviderStream, Request, Schema,

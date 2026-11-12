@@ -2,10 +2,13 @@
 
 use std::process::Stdio;
 
-use can_core::{ToolCtx, ToolError};
+use can_core::{Tool, ToolCtx, ToolError, ToolOutput, ToolSpec};
 use can_macros::tool;
+use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
+
+use crate::sandbox::Sandbox;
 
 /// So viele Bytes werden je Ausgabestrom höchstens behalten; der Rest wird verworfen.
 const MAX_STREAM_BYTES: usize = 1024 * 1024;
@@ -44,20 +47,20 @@ async fn read_capped(reader: Option<impl AsyncRead + Unpin>) -> Vec<u8> {
     kept
 }
 
-/// Führt ein Programm im Arbeitsverzeichnis aus und liefert Exit-Code, Ausgabe und Fehlerausgabe.
-/// Programm und Argumente werden getrennt übergeben; es gibt keine Shell-Syntax wie Pipes.
-#[tool(effect = "external", timeout = 60)]
-pub async fn shell(
+/// Führt das Programm aus, gegebenenfalls in der Sandbox, und liefert Exit-Code und Ausgaben.
+async fn run(
     cx: &ToolCtx,
     program: String,
-    args: Option<Vec<String>>,
+    args: Vec<String>,
+    sandbox: &Sandbox,
 ) -> Result<String, ToolError> {
     // Bereinigte Umgebung: nur der Suchpfad bleibt, keine Schlüssel aus dem Elternprozess.
     let search_path =
         std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_owned());
-    let mut command = Command::new(&program);
+    let (launcher, arguments) = sandbox.command(&program, &args, &cx.workdir);
+    let mut command = Command::new(&launcher);
     command
-        .args(args.unwrap_or_default())
+        .args(arguments)
         .current_dir(&cx.workdir)
         .env_clear()
         .env("PATH", search_path)
@@ -94,12 +97,53 @@ pub async fn shell(
     ))
 }
 
+/// Führt ein Programm im Arbeitsverzeichnis aus und liefert Exit-Code, Ausgabe und Fehlerausgabe.
+/// Programm und Argumente werden getrennt übergeben; es gibt keine Shell-Syntax wie Pipes.
+#[tool(effect = "external", timeout = 60)]
+pub async fn shell(
+    cx: &ToolCtx,
+    program: String,
+    args: Option<Vec<String>>,
+) -> Result<String, ToolError> {
+    run(cx, program, args.unwrap_or_default(), &Sandbox::default()).await
+}
+
+/// Wie [`shell`], aber jedes Programm läuft in der angegebenen Sandbox.
+pub struct SandboxedShell {
+    sandbox: Sandbox,
+}
+
+impl SandboxedShell {
+    /// Tool `shell` mit Sandbox.
+    pub fn new(sandbox: Sandbox) -> Self {
+        Self { sandbox }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for SandboxedShell {
+    fn spec(&self) -> &ToolSpec {
+        shell.spec()
+    }
+
+    async fn call(&self, args: Value, cx: &ToolCtx) -> Result<ToolOutput, ToolError> {
+        let invalid =
+            |error: serde_json::Error| ToolError::ForModel(format!("Ungültige Argumente: {error}"));
+        let program: String = serde_json::from_value(args["program"].clone()).map_err(invalid)?;
+        let arguments: Option<Vec<String>> =
+            serde_json::from_value(args["args"].clone()).map_err(invalid)?;
+        run(cx, program, arguments.unwrap_or_default(), &self.sandbox)
+            .await
+            .map(ToolOutput::text)
+    }
+}
+
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
     use super::*;
     use crate::testkit::TempDir;
-    use can_core::{Effect, Tool};
+    use can_core::Effect;
     use serde_json::json;
     use std::time::Duration;
 
@@ -215,5 +259,73 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("der Enkelprozess {grandchild} lebt noch");
+    }
+
+    /// Ob `unshare` hier Namespaces anlegen darf; sonst werden die Sandbox-Tests übersprungen.
+    fn namespaces_available() -> bool {
+        let probe = std::process::Command::new("unshare")
+            .args(["--net", "--pid", "--fork", "--mount-proc", "true"])
+            .output();
+        let ok = probe.map(|output| output.status.success()).unwrap_or(false);
+        if !ok {
+            eprintln!("unshare darf hier keine Namespaces anlegen: Sandbox-Test übersprungen");
+        }
+        ok
+    }
+
+    #[tokio::test]
+    async fn sandbox_has_no_network_and_its_own_process_table() {
+        if !namespaces_available() {
+            return;
+        }
+        let dir = TempDir::new();
+        let tool = SandboxedShell::new(Sandbox::namespaces());
+        assert_eq!(tool.spec().name, "shell");
+        // Im neuen Netzwerk-Namespace gibt es nur die (abgeschaltete) Loopback-Schnittstelle.
+        let script = "grep -c : /proc/net/dev; ls /proc | grep -c '^[0-9]'; echo $$";
+        let output = tool
+            .call(json!({"program": "sh", "args": ["-c", script]}), &dir.ctx())
+            .await
+            .unwrap()
+            .as_text();
+        let lines: Vec<&str> = output.lines().skip(2).take(3).collect();
+        assert_eq!(lines[0], "1", "nur lo: {output}");
+        assert!(
+            lines[1].parse::<u32>().unwrap() <= 4,
+            "eigene Prozesstabelle: {output}"
+        );
+        let outside = run(
+            &dir,
+            json!({"program": "sh", "args": ["-c", "grep -c : /proc/net/dev"]}),
+        )
+        .await;
+        assert_ne!(
+            outside.lines().nth(2),
+            Some("1"),
+            "ohne Sandbox ist das Netzwerk sichtbar"
+        );
+    }
+
+    #[tokio::test]
+    async fn sandbox_enforces_the_memory_limit_and_validates_arguments() {
+        let dir = TempDir::new();
+        let bad = SandboxedShell::new(Sandbox::default())
+            .call(json!({"program": 7}), &dir.ctx())
+            .await;
+        assert!(matches!(bad, Err(ToolError::ForModel(m)) if m.contains("Ungültige Argumente")));
+        if !namespaces_available() {
+            return;
+        }
+        let tool = SandboxedShell::new(Sandbox {
+            memory_mb: Some(64),
+            ..Sandbox::namespaces()
+        });
+        // Die Shell hält 100 MiB in einer Variablen: mit 64 MiB Grenze scheitert das.
+        let script = "a=$(head -c 100000000 /dev/zero | tr '\\0' x); echo ${#a}";
+        let hog = json!({"program": "sh", "args": ["-c", script]});
+        let limited = tool.call(hog.clone(), &dir.ctx()).await.unwrap().as_text();
+        let free = run(&dir, hog).await;
+        assert!(free.contains("--- stdout ---\n100000000"), "{free}");
+        assert!(!limited.contains("100000000"), "{limited}");
     }
 }

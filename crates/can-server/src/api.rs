@@ -88,6 +88,14 @@ fn check_quota(app: &App, principal: &Principal) -> Result<(), ApiError> {
             "Das Token-Budget dieses Mandanten ist aufgebraucht.",
         ));
     }
+    if quota.max_cost_cents > 0
+        && app.runs.metrics.cost_cents(&principal.tenant) >= quota.max_cost_cents
+    {
+        return Err(error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Das Kostenbudget dieses Mandanten ist aufgebraucht.",
+        ));
+    }
     Ok(())
 }
 
@@ -307,6 +315,39 @@ pub async fn log(
         .filter(|e| query.after.is_none_or(|after| e.seq > after))
         .collect();
     Ok(Json(json!({"events": events})))
+}
+
+/// Löscht eine Sitzung samt Log, etwa auf Wunsch des Nutzers oder nach Ablauf einer Frist.
+pub async fn delete_session(
+    State(app): State<Arc<App>>,
+    principal: Principal,
+    Path(id): Path<SessionId>,
+) -> Result<StatusCode, ApiError> {
+    require(&principal, Role::Admin)?;
+    session_of(&app, &principal, id).await?;
+    if app.runs.live(id).is_some() {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "Der Lauf ist noch unterwegs; zuerst abbrechen.",
+        ));
+    }
+    app.runs.store.delete(id).await.map_err(internal)?;
+    app.runs.directory.delete(id).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Prüft die Hash-Kette der Sitzung: wurde das Log nach dem Schreiben verändert?
+pub async fn verify(
+    State(app): State<Arc<App>>,
+    principal: Principal,
+    Path(id): Path<SessionId>,
+) -> Result<Json<Value>, ApiError> {
+    require(&principal, Role::Admin)?;
+    session_of(&app, &principal, id).await?;
+    let broken = app.runs.store.verify(id).await.map_err(internal)?;
+    Ok(Json(
+        json!({"intact": broken.is_none(), "first_broken_seq": broken}),
+    ))
 }
 
 pub async fn healthz() -> &'static str {

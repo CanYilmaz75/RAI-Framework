@@ -2,6 +2,24 @@
 
 ## Unveröffentlicht
 
+### Weiterer Ausbau
+
+- `Fallback`-Provider, Azure OpenAI, `Pricing`
+- `Agent::complete_structured`: Endantwort als JSON nach Schema
+- Sitzungen löschen: `Store::delete`, `DELETE /v1/sessions/{id}`
+- Dienst: Kosten je Lauf, Kostenbudget, Webhook am Laufende, `/openapi.json`
+- CLI: `can inspect`, `can eval` mit `--replay`
+- Fassaden-Crate `can`
+
+### Isolation und Sicherheit
+
+- Sandbox für `shell` über Namespaces oder Container; Arbeitsverzeichnis pro Sitzung
+- Schutz vor Datenabfluss nach vertraulichen Tool-Ausgaben; Inhaltsfilter für Ein- und Ausgaben
+- Verschlüsselung im Ruhezustand und Hash-Kette in SQLite und PostgreSQL, Prüf-Endpunkt
+- Secrets aus Umgebung, Dateien oder Vault; Bearer-Token für MCP über HTTP
+- Server-Konfiguration: Sandbox, MCP-Server, vertrauliche Tools, gesperrte Begriffe
+- Neue Abhängigkeit: `chacha20poly1305`
+
 ### Dienst
 
 - `can-server`: HTTP-API für Sitzungen, Nachrichten, Event-Strom mit Wiederaufsetzen, Freigaben,

@@ -10,6 +10,7 @@ pub mod redact;
 pub mod registry;
 pub mod run;
 pub mod step;
+mod structured;
 pub mod subagent;
 
 pub use agent::{Agent, AgentBuilder, BuildError};

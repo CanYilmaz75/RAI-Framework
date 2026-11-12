@@ -2,11 +2,13 @@
 
 pub mod api;
 pub mod auth;
+mod build;
 pub mod config;
 pub mod meta;
 pub mod metrics;
 pub mod pgmeta;
 pub mod runs;
+pub mod secrets;
 pub mod stream;
 
 use std::sync::Arc;
@@ -34,6 +36,15 @@ pub struct App {
 pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/", get(|| async { Html(include_str!("ui.html")) }))
+        .route(
+            "/openapi.json",
+            get(|| async {
+                (
+                    [("content-type", "application/json")],
+                    include_str!("openapi.json"),
+                )
+            }),
+        )
         .route("/healthz", get(api::healthz))
         .route("/metrics", get(api::metrics))
         .route("/v1/agents", get(api::list_agents))
@@ -41,10 +52,14 @@ pub fn router(app: Arc<App>) -> Router {
             "/v1/sessions",
             post(api::create_session).get(api::list_sessions),
         )
-        .route("/v1/sessions/{id}", get(api::get_session))
+        .route(
+            "/v1/sessions/{id}",
+            get(api::get_session).delete(api::delete_session),
+        )
         .route("/v1/sessions/{id}/messages", post(api::post_message))
         .route("/v1/sessions/{id}/events", get(stream::events))
         .route("/v1/sessions/{id}/log", get(api::log))
+        .route("/v1/sessions/{id}/verify", get(api::verify))
         .route("/v1/sessions/{id}/cancel", post(api::cancel))
         .route("/v1/sessions/{id}/resume", post(api::resume))
         .route(

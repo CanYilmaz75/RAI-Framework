@@ -1,28 +1,27 @@
 //! Konfigurationsdatei des Dienstes. Schlüssel stehen nie in der Datei, nur die Namen der
 //! Umgebungsvariablen, aus denen sie kommen.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
-use can_core::{Limits, MemoryStore, Provider, Rule, RuleSet, Store};
-use can_providers::{Anthropic, OpenAiCompat, Retry};
-use can_runtime::{Agent, SystemClock};
-use can_store::{PostgresStore, SqliteStore};
-use can_tools::{HttpFetch, ReadFile, shell, write_file};
+use can_core::{Decision, MemoryStore, Pricing, Rule, Store};
+use can_runtime::Agent;
+use can_store::{Cipher, PostgresStore, SqliteStore};
+use can_tools::Sandbox;
 use serde::Deserialize;
 
 use crate::auth::{Directory, Quota, Role};
 use crate::meta::{MemoryDirectory, SessionDirectory};
 use crate::pgmeta::PostgresDirectory;
+use crate::secrets::SecretSource;
 
 /// Fehler beim Lesen oder Anwenden der Konfiguration.
 #[derive(Debug, thiserror::Error)]
 #[error("Konfiguration: {0}")]
 pub struct ConfigError(pub String);
 
-fn invalid(message: impl std::fmt::Display) -> ConfigError {
+pub(crate) fn invalid(message: impl std::fmt::Display) -> ConfigError {
     ConfigError(message.to_string())
 }
 
@@ -36,6 +35,11 @@ pub struct ServerConfig {
     pub worker: Option<String>,
     #[serde(default)]
     pub store: StoreConfig,
+    /// Variable mit dem Schlüssel (64 Hex-Zeichen) für die Verschlüsselung im Ruhezustand.
+    pub encryption_key_env: Option<String>,
+    /// Woher die genannten Secrets kommen.
+    #[serde(default)]
+    pub secrets: SecretSource,
     #[serde(default)]
     pub agents: Vec<AgentConfig>,
     #[serde(default)]
@@ -81,6 +85,40 @@ pub struct AgentConfig {
     pub max_steps: Option<u32>,
     pub max_tokens: Option<u64>,
     pub timeout_secs: Option<u64>,
+    /// Preise des Modells je Million Token, für Kosten und Kostenbudget.
+    pub pricing: Option<Pricing>,
+    /// Sandbox für `shell`. Ohne Angabe läuft `shell` ungeschützt.
+    pub sandbox: Option<Sandbox>,
+    /// Eigenes Arbeitsverzeichnis pro Sitzung; im Dienst die Vorgabe.
+    #[serde(default = "yes")]
+    pub isolate_workdir: bool,
+    /// Tools, deren Ausgaben als vertraulich gelten.
+    #[serde(default)]
+    pub confidential_tools: Vec<String>,
+    /// `ask` oder `deny` für externe Tools, sobald vertrauliche Daten im Verlauf stehen.
+    pub exfiltration_guard: Option<Decision>,
+    /// Begriffe, die der Inhaltsfilter in Eingaben und Antworten sperrt.
+    #[serde(default)]
+    pub blocked_terms: Vec<String>,
+    /// MCP-Server dieses Agenten.
+    #[serde(default)]
+    pub mcp: BTreeMap<String, McpServerConfig>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Ein MCP-Server: entweder `command` (stdio) oder `url` (HTTP, optional mit Token).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerConfig {
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub url: Option<String>,
+    /// Variable mit dem Zugangstoken für den HTTP-Server.
+    pub token_env: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -89,6 +127,8 @@ pub struct TenantConfig {
     pub name: String,
     #[serde(flatten)]
     pub quota: Option<Quota>,
+    /// Adresse, die nach jedem Lauf des Mandanten per POST benachrichtigt wird.
+    pub webhook_url: Option<String>,
     #[serde(default)]
     pub keys: Vec<KeyConfig>,
 }
@@ -155,24 +195,91 @@ impl ServerConfig {
         Ok(directory)
     }
 
+    /// Preise je Agent.
+    pub fn prices(&self) -> HashMap<String, Pricing> {
+        self.agents
+            .iter()
+            .filter_map(|agent| Some((agent.name.clone(), agent.pricing?)))
+            .collect()
+    }
+
+    /// Webhook je Mandant.
+    pub fn webhooks(&self) -> HashMap<String, String> {
+        self.tenants
+            .iter()
+            .filter_map(|tenant| Some((tenant.name.clone(), tenant.webhook_url.clone()?)))
+            .collect()
+    }
+
+    /// Namen aller Secrets, die diese Konfiguration nennt.
+    pub fn secret_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.encryption_key_env.iter().cloned().collect();
+        if let StoreConfig::Postgres { url_env } = &self.store {
+            names.push(url_env.clone());
+        }
+        for agent in &self.agents {
+            names.extend(agent.api_key_env.iter().cloned());
+            names.extend(
+                agent
+                    .mcp
+                    .values()
+                    .filter_map(|server| server.token_env.clone()),
+            );
+        }
+        names.extend(
+            self.tenants
+                .iter()
+                .flat_map(|tenant| tenant.keys.iter().map(|key| key.key_env.clone())),
+        );
+        names.extend(
+            [
+                "CAN_API_KEY",
+                "OPENAI_API_KEY",
+                "CAN_ANTHROPIC_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "HOSTNAME",
+            ]
+            .map(String::from),
+        );
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// Öffnet Event-Store und Sitzungsverzeichnis.
     pub async fn open_store(
         &self,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<(Arc<dyn Store>, Arc<dyn SessionDirectory>), ConfigError> {
+        let cipher = match &self.encryption_key_env {
+            Some(variable) => {
+                let key = lookup(variable)
+                    .ok_or_else(|| invalid(format!("Variable {variable} fehlt")))?;
+                Some(Cipher::from_hex(&key).map_err(invalid)?)
+            }
+            None => None,
+        };
         Ok(match &self.store {
             StoreConfig::Memory => (
                 Arc::new(MemoryStore::new()),
                 Arc::new(MemoryDirectory::new()),
             ),
-            StoreConfig::Sqlite { path } => (
-                Arc::new(SqliteStore::open(path).map_err(invalid)?),
-                Arc::new(MemoryDirectory::new()),
-            ),
+            StoreConfig::Sqlite { path } => {
+                let store = SqliteStore::open(path).map_err(invalid)?;
+                let store = match cipher {
+                    Some(cipher) => store.with_cipher(cipher),
+                    None => store,
+                };
+                (Arc::new(store), Arc::new(MemoryDirectory::new()))
+            }
             StoreConfig::Postgres { url_env } => {
                 let url =
                     lookup(url_env).ok_or_else(|| invalid(format!("Variable {url_env} fehlt")))?;
                 let store = PostgresStore::connect(&url).await.map_err(invalid)?;
+                let store = match cipher {
+                    Some(cipher) => store.with_cipher(cipher),
+                    None => store,
+                };
                 let sessions = PostgresDirectory::connect(&url).await.map_err(invalid)?;
                 (Arc::new(store), Arc::new(sessions))
             }
@@ -180,7 +287,7 @@ impl ServerConfig {
     }
 
     /// Baut alle Agenten auf dem gegebenen Store.
-    pub fn agents(
+    pub async fn agents(
         &self,
         store: &Arc<dyn Store>,
         lookup: impl Fn(&str) -> Option<String>,
@@ -192,82 +299,10 @@ impl ServerConfig {
             .unwrap_or_else(|| "can-server".to_owned());
         let mut agents = HashMap::new();
         for config in &self.agents {
-            let agent = config.build(store.clone(), &worker, &lookup)?;
+            let agent = config.build(store.clone(), &worker, &lookup).await?;
             agents.insert(config.name.clone(), agent);
         }
         Ok(agents)
-    }
-}
-
-impl AgentConfig {
-    fn provider(
-        &self,
-        lookup: &impl Fn(&str) -> Option<String>,
-    ) -> Result<Arc<dyn Provider>, ConfigError> {
-        let source = |name: &str| {
-            if name.ends_with("BASE_URL") && self.base_url.is_some() {
-                return self.base_url.clone();
-            }
-            match &self.api_key_env {
-                Some(variable) if name.ends_with("API_KEY") => lookup(variable),
-                _ => lookup(name),
-            }
-        };
-        let clock = Arc::new(SystemClock);
-        Ok(match self.provider.as_str() {
-            "anthropic" => Arc::new(Retry::new(
-                Anthropic::from_lookup(source).map_err(invalid)?,
-                clock,
-            )),
-            _ => Arc::new(Retry::new(
-                OpenAiCompat::from_lookup(source).map_err(invalid)?,
-                clock,
-            )),
-        })
-    }
-
-    fn build(
-        &self,
-        store: Arc<dyn Store>,
-        worker: &str,
-        lookup: &impl Fn(&str) -> Option<String>,
-    ) -> Result<Agent, ConfigError> {
-        let defaults = Limits::default();
-        let limits = Limits {
-            max_steps: self.max_steps.unwrap_or(defaults.max_steps),
-            max_tokens: self.max_tokens.unwrap_or(defaults.max_tokens),
-            timeout: self
-                .timeout_secs
-                .map(Duration::from_secs)
-                .unwrap_or(defaults.timeout),
-            ..defaults
-        };
-        let mut policy = RuleSet::safe_defaults();
-        policy.rules.extend(self.rules.iter().cloned());
-        let mut builder = Agent::builder()
-            .provider_arc(self.provider(lookup)?)
-            .model(&self.model)
-            .policy(policy)
-            .limits(limits)
-            .store_arc(store)
-            .owner(worker);
-        if let Some(system) = &self.system {
-            builder = builder.system(system);
-        }
-        if let Some(workdir) = &self.workdir {
-            builder = builder.workdir(workdir);
-        }
-        for tool in &self.tools {
-            builder = match tool.as_str() {
-                "read_file" => builder.tool(ReadFile::new()),
-                "write_file" => builder.tool(write_file),
-                "shell" => builder.tool(shell),
-                _ => builder.tool(HttpFetch::new(self.http_allowed_hosts.clone())),
-            };
-        }
-        builder
-            .build()
-            .map_err(|error| invalid(format!("Agent {}: {error}", self.name)))
     }
 }
 

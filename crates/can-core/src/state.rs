@@ -45,6 +45,10 @@ pub struct RunConfig {
     /// Token, die für die Antwort des Modells frei bleiben müssen.
     #[serde(default)]
     pub reserve_output: u32,
+    /// Schutz vor Datenabfluss: Hat die Sitzung vertrauliche Daten gesehen, gilt für jedes
+    /// externe Tool mindestens diese Entscheidung.
+    #[serde(default)]
+    pub exfiltration_guard: Option<crate::event::Decision>,
 }
 
 impl RunConfig {
@@ -130,6 +134,9 @@ pub struct RunState {
     /// Position, die das nächste dauerhafte Event bekommt.
     pub next_seq: u64,
     pub finish: Option<FinishReason>,
+    /// Hat ein als vertraulich markiertes Tool in dieser Sitzung Daten geliefert?
+    #[serde(default)]
+    pub confidential_seen: bool,
 }
 
 impl RunState {
@@ -149,6 +156,7 @@ impl RunState {
             started_at: None,
             next_seq: 0,
             finish: None,
+            confidential_seen: false,
         }
     }
 
@@ -228,6 +236,18 @@ impl RunState {
                 output,
                 is_error,
             } => {
+                let name = self
+                    .pending_call(*call_id)
+                    .map(|pending| pending.call.name.clone());
+                if !is_error
+                    && name.is_some_and(|name| {
+                        self.config
+                            .tool(&name)
+                            .is_some_and(|spec| spec.confidential)
+                    })
+                {
+                    self.confidential_seen = true;
+                }
                 let status = CallStatus::Finished {
                     output: output.clone(),
                     is_error: *is_error,

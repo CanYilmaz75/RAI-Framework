@@ -9,6 +9,7 @@ rust-version = "1.88"
 publish = false
 
 [workspace.dependencies]
+can = { path = "crates/can" }
 can-core = { path = "crates/can-core" }
 can-providers = { path = "crates/can-providers" }
 can-macros = { path = "crates/can-macros" }
@@ -19,6 +20,7 @@ can-server = { path = "crates/can-server" }
 
 async-trait = "0.1"
 axum = "0.8"
+chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }

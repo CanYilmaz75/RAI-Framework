@@ -66,12 +66,18 @@ fn full_file_parses_and_builds_directory_and_agents() {
         directory.quota("acme"),
         Quota {
             max_concurrent_runs: 3,
-            max_tokens: 500_000
+            max_tokens: 500_000,
+            max_cost_cents: 0
         }
     );
 
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-    let agents = config.agents(&store, env).unwrap();
+    let agents = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(config.agents(&store, env))
+        .unwrap();
     let tools: Vec<&str> = agents["helfer"]
         .config()
         .tools
@@ -135,4 +141,68 @@ async fn stores_open_and_missing_database_url_is_reported() {
             .to_string()
             .contains("CAN_DATABASE_URL")
     );
+}
+
+#[tokio::test]
+async fn isolation_settings_reach_the_agent() {
+    let text = r#"
+encryption_key_env = "STORE_KEY"
+
+[secrets]
+kind = "files"
+dir = "/run/secrets"
+
+[[agents]]
+name = "sicher"
+model = "m"
+tools = ["read_file", "shell", "http_fetch"]
+confidential_tools = ["read_file"]
+exfiltration_guard = "deny"
+blocked_terms = ["Projekt Zeus"]
+
+[agents.sandbox]
+mode = "namespaces"
+memory_mb = 256
+"#;
+    let config = ServerConfig::parse(text).unwrap();
+    assert!(
+        config.agents[0].isolate_workdir,
+        "im Dienst ist das getrennte Arbeitsverzeichnis die Vorgabe"
+    );
+    assert!(config.secret_names().contains(&"STORE_KEY".to_owned()));
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    let agents = config.agents(&store, env).await.unwrap();
+    let agent = agents["sicher"].config();
+    assert_eq!(agent.exfiltration_guard, Some(Decision::Deny));
+    let confidential: Vec<&str> = agent
+        .tools
+        .iter()
+        .filter(|spec| spec.confidential)
+        .map(|spec| spec.name.as_str())
+        .collect();
+    assert_eq!(confidential, ["read_file"]);
+
+    // Ohne den Schlüssel startet der Dienst nicht; mit einem falschen auch nicht.
+    assert!(
+        config
+            .open_store(env)
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("STORE_KEY")
+    );
+    let short = |name: &str| (name == "STORE_KEY").then(|| "abc".to_owned());
+    assert!(config.open_store(short).await.is_err());
+    let good = |name: &str| (name == "STORE_KEY").then(|| "00".repeat(32));
+    assert!(config.open_store(good).await.is_ok());
+
+    let both = "[[agents]]\nname = \"a\"\nmodel = \"m\"\n[agents.mcp.x]\ncommand = \"c\"\nurl = \"http://x\"";
+    let error = ServerConfig::parse(both)
+        .unwrap()
+        .agents(&store, env)
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("genau eines"));
 }

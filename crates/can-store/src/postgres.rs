@@ -8,10 +8,13 @@ use can_core::{
     store::lease_until,
 };
 use tokio::sync::Mutex;
+
+use crate::seal::{self, Cipher, Sealer};
 use tokio_postgres::{Client, NoTls, error::SqlState};
 
 /// Jede Migration hebt die Version um eins; neue kommen ans Ende.
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
 CREATE TABLE can_sessions (
   id          TEXT PRIMARY KEY,
   created_at  BIGINT NOT NULL,
@@ -32,12 +35,15 @@ CREATE TABLE can_blobs (
   digest TEXT PRIMARY KEY,        -- Inhaltsadresse
   bytes  BYTEA NOT NULL
 );
-"];
+",
+    "ALTER TABLE can_events ADD COLUMN chain TEXT;",
+];
 
 /// Event-Log in PostgreSQL. Mehrere Prozesse dürfen dieselbe Datenbank nutzen; pro Sitzung
 /// schreibt immer nur einer.
 pub struct PostgresStore {
     client: Mutex<Client>,
+    sealer: Sealer,
 }
 
 fn backend(error: tokio_postgres::Error) -> StoreError {
@@ -62,7 +68,14 @@ impl PostgresStore {
         Self::migrate(&mut client).await?;
         Ok(Self {
             client: Mutex::new(client),
+            sealer: Sealer::default(),
         })
+    }
+
+    /// Verschlüsselt ab jetzt alle neuen Events und Blobs mit diesem Schlüssel.
+    pub fn with_cipher(mut self, cipher: Cipher) -> Self {
+        self.sealer = Sealer::encrypted(cipher);
+        self
     }
 
     /// Bringt das Schema auf den neuesten Stand. Eine Sperre verhindert, dass zwei startende
@@ -117,7 +130,7 @@ impl Store for PostgresStore {
                 )));
             }
             log.push(
-                serde_json::from_str(&payload)
+                serde_json::from_str(&self.sealer.open(&payload)?)
                     .map_err(|error| StoreError::Corrupt(error.to_string()))?,
             );
         }
@@ -161,6 +174,12 @@ impl Store for PostgresStore {
             .await
             .map_err(backend)?;
         let next: i64 = row.get(0);
+        // Die Hash-Kette setzt am letzten Glied der Sitzung an.
+        let last = transaction
+            .query_opt("SELECT coalesce(chain, '') FROM can_events WHERE session_id = $1 ORDER BY seq DESC LIMIT 1", &[&session])
+            .await
+            .map_err(backend)?;
+        let mut previous: String = last.map(|row| row.get(0)).unwrap_or_default();
         for (expected, envelope) in (next..).zip(events) {
             if to_i64(envelope.seq) != expected {
                 return Err(StoreError::Conflict {
@@ -168,12 +187,14 @@ impl Store for PostgresStore {
                     seq: envelope.seq,
                 });
             }
-            let payload = serde_json::to_string(envelope)
+            let plain = serde_json::to_string(envelope)
                 .map_err(|error| StoreError::Backend(Box::new(error)))?;
+            let payload = self.sealer.seal(&plain)?;
+            previous = seal::link(&previous, &payload);
             let inserted = transaction
                 .execute(
-                    "INSERT INTO can_events (session_id, seq, ts, schema, kind, payload) VALUES ($1, $2, $3, $4, $5, $6)",
-                    &[&session, &expected, &to_i64(envelope.ts.0), &i32::from(envelope.schema), &envelope.event.kind(), &payload],
+                    "INSERT INTO can_events (session_id, seq, ts, schema, kind, payload, chain) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    &[&session, &expected, &to_i64(envelope.ts.0), &i32::from(envelope.schema), &envelope.event.kind(), &payload, &previous],
                 )
                 .await;
             match inserted {
@@ -199,11 +220,12 @@ impl Store for PostgresStore {
 
     async fn put_blob(&self, bytes: Vec<u8>) -> Result<Digest, StoreError> {
         let digest = Digest::of(&bytes);
+        let sealed = self.sealer.seal_bytes(bytes)?;
         let client = self.client.lock().await;
         client
             .execute(
                 "INSERT INTO can_blobs (digest, bytes) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                &[&digest.0, &bytes],
+                &[&digest.0, &sealed],
             )
             .await
             .map_err(backend)?;
@@ -219,7 +241,43 @@ impl Store for PostgresStore {
             )
             .await
             .map_err(backend)?;
-        Ok(row.map(|row| row.get(0)))
+        row.map(|row| self.sealer.open_bytes(row.get(0)))
+            .transpose()
+    }
+
+    async fn delete(&self, id: SessionId) -> Result<(), StoreError> {
+        let session = id.to_string();
+        let mut client = self.client.lock().await;
+        let transaction = client.transaction().await.map_err(backend)?;
+        transaction
+            .execute("DELETE FROM can_events WHERE session_id = $1", &[&session])
+            .await
+            .map_err(backend)?;
+        transaction
+            .execute("DELETE FROM can_sessions WHERE id = $1", &[&session])
+            .await
+            .map_err(backend)?;
+        transaction.commit().await.map_err(backend)
+    }
+
+    async fn verify(&self, id: SessionId) -> Result<Option<u64>, StoreError> {
+        let client = self.client.lock().await;
+        let rows = client
+            .query(
+                "SELECT seq, payload, chain FROM can_events WHERE session_id = $1 ORDER BY seq",
+                &[&id.to_string()],
+            )
+            .await
+            .map_err(backend)?;
+        let rows = rows.iter().map(|row| {
+            let seq: i64 = row.get(0);
+            (
+                u64::try_from(seq).unwrap_or(0),
+                row.get::<_, String>(1),
+                row.get::<_, Option<String>>(2),
+            )
+        });
+        Ok(seal::first_broken(rows))
     }
 
     async fn acquire(

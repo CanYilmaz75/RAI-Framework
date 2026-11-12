@@ -28,7 +28,7 @@ pub struct Range {
 /// Schneidet einen Bereich aus dem Namen des Arbeitsverzeichnisses.
 ///
 /// Zweite Zeile der Beschreibung.
-#[tool(name = "slice_workdir", timeout = 5)]
+#[tool(name = "slice_workdir", timeout = 5, confidential)]
 pub async fn slice(
     cx: &ToolCtx,
     range: Range,
@@ -103,6 +103,7 @@ fn defaults_are_safe_and_attributes_override() {
     );
     assert!(spec.description.ends_with("Zweite Zeile der Beschreibung."));
     assert_eq!(ping.spec().effect, Effect::External);
+    assert!(spec.confidential && !ping.spec().confidential);
     assert_eq!(ping.spec().input_schema.0["properties"], json!({}));
 }
 

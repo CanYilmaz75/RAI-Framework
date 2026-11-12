@@ -12,6 +12,7 @@ use can_core::{
 use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
 
 use crate::migrate;
+use crate::seal::{self, Cipher, Sealer};
 
 /// Kurzangaben zu einer gespeicherten Sitzung.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,6 +27,7 @@ pub struct SessionInfo {
 #[derive(Clone)]
 pub struct SqliteStore {
     connection: Arc<Mutex<Connection>>,
+    sealer: Sealer,
 }
 
 fn backend(error: impl std::error::Error + Send + Sync + 'static) -> StoreError {
@@ -54,7 +56,14 @@ impl SqliteStore {
         migrate::prepare(&mut connection).map_err(backend)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            sealer: Sealer::default(),
         })
+    }
+
+    /// Verschlüsselt ab jetzt alle neuen Events und Blobs mit diesem Schlüssel.
+    pub fn with_cipher(mut self, cipher: Cipher) -> Self {
+        self.sealer = Sealer::encrypted(cipher);
+        self
     }
 
     /// Führt `work` mit der Verbindung auf einem blockierenden Thread aus.
@@ -111,6 +120,7 @@ fn upcast(schema: u16, payload: &str) -> Result<Envelope, StoreError> {
 #[async_trait]
 impl Store for SqliteStore {
     async fn load(&self, id: SessionId) -> Result<Vec<Envelope>, StoreError> {
+        let sealer = self.sealer.clone();
         self.with(move |connection| {
             let mut statement = connection
                 .prepare("SELECT schema, payload FROM events WHERE session_id = ?1 ORDER BY seq")
@@ -123,7 +133,7 @@ impl Store for SqliteStore {
             let mut log = Vec::new();
             for row in rows {
                 let (schema, payload) = row.map_err(backend)?;
-                log.push(upcast(schema, &payload)?);
+                log.push(upcast(schema, &sealer.open(&payload)?)?);
             }
             Ok(log)
         })
@@ -144,7 +154,9 @@ impl Store for SqliteStore {
         };
         let mut rows = Vec::with_capacity(events.len());
         for envelope in events {
-            let payload = serde_json::to_string(envelope).map_err(backend)?;
+            let payload = self
+                .sealer
+                .seal(&serde_json::to_string(envelope).map_err(backend)?)?;
             rows.push((
                 envelope.seq,
                 envelope.ts.0,
@@ -167,13 +179,24 @@ impl Store for SqliteStore {
                     row.get(0)
                 })
                 .map_err(backend)?;
+            // Die Hash-Kette setzt am letzten Glied der Sitzung an.
+            let mut previous: String = transaction
+                .query_row(
+                    "SELECT coalesce(chain, '') FROM events WHERE session_id = ?1 ORDER BY seq DESC LIMIT 1",
+                    params![session],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(backend)?
+                .unwrap_or_default();
             for (expected, (seq, ts, schema, kind, payload)) in (next..).zip(rows) {
+                previous = seal::link(&previous, &payload);
                 if to_i64(seq) != expected {
                     return Err(StoreError::Conflict { session: id, seq });
                 }
                 let inserted = transaction.execute(
-                    "INSERT INTO events (session_id, seq, ts, schema, kind, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![session, to_i64(seq), to_i64(ts), schema, kind, payload],
+                    "INSERT INTO events (session_id, seq, ts, schema, kind, payload, chain) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![session, to_i64(seq), to_i64(ts), schema, kind, payload, previous],
                 );
                 match inserted {
                     Ok(_) => {}
@@ -201,30 +224,77 @@ impl Store for SqliteStore {
     }
 
     async fn put_blob(&self, bytes: Vec<u8>) -> Result<Digest, StoreError> {
+        let digest = Digest::of(&bytes);
+        let (key, sealed) = (digest.0.clone(), self.sealer.seal_bytes(bytes)?);
         self.with(move |connection| {
-            let digest = Digest::of(&bytes);
             connection
                 .execute(
                     "INSERT OR IGNORE INTO blobs (digest, bytes) VALUES (?1, ?2)",
-                    params![digest.0, bytes],
+                    params![key, sealed],
                 )
+                .map(|_| ())
+                .map_err(backend)
+        })
+        .await?;
+        Ok(digest)
+    }
+
+    async fn get_blob(&self, digest: &Digest) -> Result<Option<Vec<u8>>, StoreError> {
+        let key = digest.0.clone();
+        let stored: Option<Vec<u8>> = self
+            .with(move |connection| {
+                connection
+                    .query_row(
+                        "SELECT bytes FROM blobs WHERE digest = ?1",
+                        params![key],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(backend)
+            })
+            .await?;
+        stored
+            .map(|bytes| self.sealer.open_bytes(bytes))
+            .transpose()
+    }
+
+    async fn delete(&self, id: SessionId) -> Result<(), StoreError> {
+        let session = id.to_string();
+        self.with(move |connection| {
+            let transaction = connection.transaction().map_err(backend)?;
+            transaction
+                .execute("DELETE FROM events WHERE session_id = ?1", params![session])
                 .map_err(backend)?;
-            Ok(digest)
+            transaction
+                .execute("DELETE FROM sessions WHERE id = ?1", params![session])
+                .map_err(backend)?;
+            transaction.commit().map_err(backend)
         })
         .await
     }
 
-    async fn get_blob(&self, digest: &Digest) -> Result<Option<Vec<u8>>, StoreError> {
-        let digest = digest.0.clone();
+    async fn verify(&self, id: SessionId) -> Result<Option<u64>, StoreError> {
         self.with(move |connection| {
-            connection
-                .query_row(
-                    "SELECT bytes FROM blobs WHERE digest = ?1",
-                    params![digest],
-                    |row| row.get(0),
+            let mut statement = connection
+                .prepare(
+                    "SELECT seq, payload, chain FROM events WHERE session_id = ?1 ORDER BY seq",
                 )
-                .optional()
-                .map_err(backend)
+                .map_err(backend)?;
+            let rows = statement
+                .query_map(params![id.to_string()], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })
+                .map_err(backend)?;
+            let mut all = Vec::new();
+            for row in rows {
+                let (seq, payload, chain) = row.map_err(backend)?;
+                all.push((u64::try_from(seq).unwrap_or(0), payload, chain));
+            }
+            Ok(seal::first_broken(all))
         })
         .await
     }

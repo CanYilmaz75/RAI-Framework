@@ -35,6 +35,9 @@ pub struct Quota {
     /// Token-Budget des Mandanten, seit der Dienst läuft; null heißt unbegrenzt.
     #[serde(default)]
     pub max_tokens: u64,
+    /// Kostenbudget des Mandanten in Cent, seit der Dienst läuft; null heißt unbegrenzt.
+    #[serde(default)]
+    pub max_cost_cents: u64,
 }
 
 impl Quota {
@@ -48,6 +51,7 @@ impl Default for Quota {
         Self {
             max_concurrent_runs: Self::default_runs(),
             max_tokens: 0,
+            max_cost_cents: 0,
         }
     }
 }
@@ -116,6 +120,7 @@ mod tests {
                 Quota {
                     max_concurrent_runs: 2,
                     max_tokens: 1_000,
+                    max_cost_cents: 0,
                 },
             )
             .key("geheim-1", "acme", "ada", Role::Admin)

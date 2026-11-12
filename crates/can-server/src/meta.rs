@@ -55,6 +55,9 @@ pub trait SessionDirectory: Send + Sync {
 
     /// Setzt den Zustand.
     async fn set_status(&self, id: SessionId, status: SessionStatus) -> Result<(), MetaError>;
+
+    /// Entfernt den Eintrag.
+    async fn delete(&self, id: SessionId) -> Result<(), MetaError>;
 }
 
 /// Verzeichnis im Arbeitsspeicher: für Tests und einen einzelnen Prozess.
@@ -112,6 +115,11 @@ impl SessionDirectory for MemoryDirectory {
     async fn running(&self) -> Result<Vec<SessionMeta>, MetaError> {
         let running = |meta: &&SessionMeta| meta.status == SessionStatus::Running;
         Ok(self.lock()?.values().filter(running).cloned().collect())
+    }
+
+    async fn delete(&self, id: SessionId) -> Result<(), MetaError> {
+        self.lock()?.remove(&id);
+        Ok(())
     }
 
     async fn set_status(&self, id: SessionId, status: SessionStatus) -> Result<(), MetaError> {

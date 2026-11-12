@@ -5,11 +5,15 @@
 mod migrate;
 #[cfg(feature = "postgres")]
 pub mod postgres;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+pub mod seal;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
 pub use can_core::{MemoryStore, Store, StoreError};
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresStore;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+pub use seal::{Cipher, Sealer};
 #[cfg(feature = "sqlite")]
 pub use sqlite::{SessionInfo, SqliteStore};
